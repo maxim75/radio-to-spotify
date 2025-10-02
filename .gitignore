@@ -1,0 +1,6 @@
+cron_logs
+data
+__pycache__/
+*.pyc
+*.pyo
+*.pyd

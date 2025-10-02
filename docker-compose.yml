@@ -1,0 +1,6 @@
+services:
+  cron_python_app:
+    build: .
+    volumes:
+      - ./cron_logs:/var/log # Mount a volume to persist logs on the host
+      - ./data:/var/data 
