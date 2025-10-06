@@ -22,7 +22,7 @@ COPY *.sh /app/
 COPY crontab /etc/cron.d/my_cronjob
 
 # Give execute permission to the Python script
-RUN chmod +x /app/load_playlist.py
+RUN chmod +x /app/load_playlist.*
 
 # Set permissions for the crontab file
 RUN chmod 0644 /etc/cron.d/my_cronjob
