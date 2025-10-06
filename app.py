@@ -32,7 +32,7 @@ def hello():
     return "Radio to Spotify!!"
 
 @app.route('/config')
-def hello():
+def config():
     if aws_api_key:
         return f"AWS_API_KEY {aws_api_key[:4]}"
     else:
