@@ -3,3 +3,5 @@ flask
 requests
 uwsgi
 python-crontab
+beautifulsoup4
+latest-user-agents
