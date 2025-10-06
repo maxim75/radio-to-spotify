@@ -1,6 +1,6 @@
 #!/bin/bash
 #source /root/.bashrc
-#which python
+which python
 cd /app
-#pip install -r /requirements.txt
+pip install -r /requirements.txt
 python load_playlist.py
