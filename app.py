@@ -24,7 +24,8 @@ app = Flask(__name__)
 
 @app.route('/')
 def hello():
-	return "Radio to Spotify!!"
+    logging.warning('Hello, World! endpoint was reached')
+    return "Radio to Spotify!!"
 
 if __name__ == '__main__':
 	app.run(host='0.0.0.0', port=8001)
