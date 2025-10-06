@@ -2,8 +2,8 @@ from flask import Flask
 import logging
 import subprocess
 
-logging.basicConfig(filename='/var/log/app.log', level=logging.INFO,
-                    format='%(asctime)s - %(levelname)s - %(message)s')
+# logging.basicConfig(filename='/var/log/app.log', level=logging.INFO,
+#                     format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Log messages
 logging.info('app.py script started')
@@ -24,7 +24,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def hello():
-	return "Radio to Spotify!"
+	return "Radio to Spotify!!"
 
 if __name__ == '__main__':
 	app.run(host='0.0.0.0', port=8001)
