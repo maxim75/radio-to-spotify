@@ -33,6 +33,6 @@ RUN touch /var/log/cron_output.log
 
 # Start cron in the foreground and keep the container alive
 # CMD ["cron", "-f"]
-CMD cron
+# CMD cron
 # CMD ["python", "app.py"]
 CMD ["uwsgi", "--http", "0.0.0.0:8001", "--master", "-p",  "4",  "-w", "app:app"]
