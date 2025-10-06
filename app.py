@@ -1,6 +1,9 @@
 from flask import Flask
 import logging
 import subprocess
+import os
+
+aws_api_key = os.environ.get("AWS_API_KEY")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -27,6 +30,16 @@ def hello():
     logging.info('INFO')
     logging.debug('debug')
     return "Radio to Spotify!!"
+
+@app.route('/config')
+def hello():
+    if aws_api_key:
+        return f"AWS_API_KEY {aws_api_key[:4]}"
+    else:
+        return "AWS_API_KEY is not set"
+
+
+
 
 if __name__ == '__main__':
 	app.run(host='0.0.0.0', port=8001)
