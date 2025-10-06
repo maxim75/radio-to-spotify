@@ -1,3 +1,3 @@
 #!/bin/bash
 source /root/.bashrc
-python load_playlist.py
+python3 ./load_playlist.py
