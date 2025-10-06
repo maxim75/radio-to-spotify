@@ -18,6 +18,7 @@ WORKDIR /app
 
 # Copy the Python script and crontab file
 COPY *.py /app/
+COPY *.sh /app/
 COPY crontab /etc/cron.d/my_cronjob
 
 # Give execute permission to the Python script

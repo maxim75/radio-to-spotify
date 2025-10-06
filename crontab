@@ -1,1 +1,1 @@
-* * * * * root /usr/local/bin/python3 /app/load_playlist.py >> /var/log/cron_output.log 2>&1
+* * * * * root /usr/local/bin/python3 /app/load_playlist.sh >> /var/log/cron_output.log 2>&1
