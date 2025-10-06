@@ -4,3 +4,10 @@ services:
     volumes:
       - ./cron_logs:/var/log # Mount a volume to persist logs on the host
       - ./data:/var/data 
+
+    ports:
+      - '8000:8000'
+
+    environment:
+      - TZ=Europe/Kiev # Set the timezone to Kyiv
+      - AWS_API_KEY=${AWS_API_KEY} # Pass AWS_API_KEY from host environment
