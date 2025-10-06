@@ -6,7 +6,7 @@ services:
       - ./data:/var/data 
 
     ports:
-      - '8000:8000'
+      - '8001:8001'
 
     environment:
       - TZ=Europe/Kiev # Set the timezone to Kyiv

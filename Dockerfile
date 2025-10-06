@@ -35,4 +35,4 @@ RUN touch /var/log/cron_output.log
 # CMD ["cron", "-f"]
 CMD cron
 # CMD ["python", "app.py"]
-CMD ["uwsgi", "--http", "0.0.0.0:8000", "--master", "-p",  "4",  "-w", "app:app"]
+CMD ["uwsgi", "--http", "0.0.0.0:8001", "--master", "-p",  "4",  "-w", "app:app"]
