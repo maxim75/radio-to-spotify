@@ -5,3 +5,6 @@ uwsgi
 python-crontab
 beautifulsoup4
 latest-user-agents
+APScheduler
+boto3
+botocore

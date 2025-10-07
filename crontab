@@ -1,1 +1,0 @@
-* * * * * /app/load_playlist.sh >> /var/log/cron_output.log 2>&1
