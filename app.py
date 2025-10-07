@@ -6,6 +6,8 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import atexit
 import load_playlist
 import playlist_upload
+import pandas as pd 
+import datetime
 
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID")
 
@@ -43,13 +45,30 @@ def hello():
 
 @app.route('/load_playlist')
 def load_playlist_route():
-     playlist_filename = load_playlist.load_playlist()
-     playlist_upload.upload_file_to_s3(
-         playlist_filename,
-         "radio-playlists",
-         playlist_filename.split("/")[-1]
-     )
-     return "Playlist loaded"
+    playlist_filename = load_playlist.load_playlist()
+    playlist_upload.upload_file_to_s3(
+        playlist_filename,
+        "radio-playlists",
+        playlist_filename.split("/")[-1]
+    )
+
+
+    for station_id in [75885, 309175, 294683]:
+        current_datetime = datetime.datetime.now()
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        current_date = current_datetime.strftime("%Y-%m-%d")
+        yesterday_date = (current_datetime - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+        playlist_df = load_playlist.get_playlist_from_raddio(station_id, yesterday_date)
+        filename = f"/var/data/playlist_{station_id}_{timestamp}.csv"
+        playlist_df.to_csv(filename, index=False)
+        playlist_upload.upload_file_to_s3(
+            filename,
+            "radio-playlists",
+            filename.split("/")[-1]
+        )
+
+
+    return "Playlist loaded"
 
 @app.route('/config')
 def config():
