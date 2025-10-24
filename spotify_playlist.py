@@ -86,6 +86,8 @@ def search_track(sp, artist, track):
     try:
         query = f"{track} artist:{artist}"
         results = sp.search(q=query, type='track', limit=1)
+        logging.info(f"Searching for track: {query}")
+        logging.info(f"Search results: {results}")
         
         if results['tracks']['items']:
             return results['tracks']['items'][0]['uri']
@@ -114,11 +116,16 @@ def create_playlist_from_csv(csv_content, playlist_name):
         # Load CSV content into DataFrame
         df = pd.read_csv(StringIO(csv_content))
         
+        logging.info(f"Creating playlist '{playlist_name}' with {len(df)} tracks")
+
+        logging.info(f"Dataframe columns: {df.columns}")
+
         # Collect track URIs
         track_uris = []
         for _, row in df.iterrows():
-            artist = row.get('artist', '')
-            track = row.get('track', '')
+            artist = row.get('artist_name', '')
+            track = row.get('song_name', '')
+            logging.info(f"Processing track: {track} by {artist}")
             if artist and track:
                 track_uri = search_track(sp, artist, track)
                 if track_uri:
