@@ -36,6 +36,25 @@
         .add-button:hover {
             background-color: #1ed760;
         }
+        .button-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .view-button {
+            background-color: #333;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 14px;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .view-button:hover {
+            background-color: #444;
+        }
         .status-message {
             padding: 10px;
             margin: 10px 0;
@@ -68,10 +87,13 @@
         {% for file in files %}
         <li class="playlist-item">
             <span class="playlist-name">{{ file }}</span>
-            <form action="{{ url_for('create_playlist_from_file') }}" method="post" style="display: inline;">
-                <input type="hidden" name="file_name" value="{{ file }}">
-                <button type="submit" class="add-button">Add to Spotify</button>
-            </form>
+            <div class="button-group">
+                <a href="{{ url_for('view_playlist', file_name=file) }}" class="view-button">View</a>
+                <form action="{{ url_for('create_playlist_from_file') }}" method="post" style="display: inline;">
+                    <input type="hidden" name="file_name" value="{{ file }}">
+                    <button type="submit" class="add-button">Add to Spotify</button>
+                </form>
+            </div>
         </li>
         {% else %}
         <li class="playlist-item">No playlist files found.</li>

@@ -10,6 +10,7 @@ import pandas as pd
 import datetime
 import spotify_playlist
 from urllib.parse import urlencode
+from io import StringIO
 
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID")
 
@@ -186,6 +187,32 @@ def create_playlists():
     except Exception as e:
         logging.error(f"Error in create_playlists route: {e}")
         flash(f"Error creating playlists: {str(e)}", 'error')
+        return redirect(url_for('list_playlists'))
+
+@app.route('/playlists/view/<path:file_name>')
+def view_playlist(file_name):
+    """View contents of a specific CSV file"""
+    try:
+        # Download CSV content
+        csv_content = playlist_upload.download_file_from_s3("radio-playlists", file_name)
+        if not csv_content:
+            flash(f'Failed to download file: {file_name}', 'error')
+            return redirect(url_for('list_playlists'))
+
+        # Parse CSV content into a DataFrame
+        df = pd.read_csv(StringIO(csv_content))
+        
+        # Convert DataFrame to list of dictionaries for template
+        data = df.to_dict('records')
+        columns = df.columns.tolist()
+
+        return render_template('view_playlist.html',
+                           file_name=file_name,
+                           data=data,
+                           columns=columns)
+    except Exception as e:
+        logging.error(f"Error viewing playlist {file_name}: {e}")
+        flash(f"Error viewing playlist: {str(e)}", 'error')
         return redirect(url_for('list_playlists'))
 
 if __name__ == '__main__':
