@@ -1,4 +1,4 @@
-from flask import Flask, request, redirect, session, url_for
+from flask import Flask, request, redirect, session, url_for, render_template, flash
 import logging
 import subprocess
 import os
@@ -130,15 +130,63 @@ def config():
     else:
         return "AWS_ACCESS_KEY_ID is not set"
 
+@app.route('/playlists')
+def list_playlists():
+    """Show list of playlist files from S3"""
+    try:
+        files = playlist_upload.list_objects_in_bucket("radio-playlists")
+        # Filter only CSV files and sort by name
+        csv_files = sorted([f for f in files if f.endswith('.csv')])
+        return render_template('playlists.html', files=csv_files)
+    except Exception as e:
+        logging.error(f"Error listing playlists: {e}")
+        flash(f"Error listing playlists: {str(e)}", 'error')
+        return render_template('playlists.html', files=[])
+
+@app.route('/create_playlist_from_file', methods=['POST'])
+def create_playlist_from_file():
+    """Create a Spotify playlist from a specific CSV file"""
+    try:
+        file_name = request.form.get('file_name')
+        if not file_name:
+            flash('No file name provided', 'error')
+            return redirect(url_for('list_playlists'))
+
+        # Download CSV content
+        csv_content = playlist_upload.download_file_from_s3("radio-playlists", file_name)
+        if not csv_content:
+            flash(f'Failed to download file: {file_name}', 'error')
+            return redirect(url_for('list_playlists'))
+
+        # Create playlist name from file name (remove .csv extension)
+        playlist_name = file_name.rsplit('.', 1)[0]
+        
+        # Create the playlist
+        success = spotify_playlist.create_playlist_from_csv(csv_content, playlist_name)
+        
+        if success:
+            flash(f'Successfully created playlist: {playlist_name}', 'success')
+        else:
+            flash(f'Failed to create playlist: {playlist_name}', 'error')
+            
+        return redirect(url_for('list_playlists'))
+        
+    except Exception as e:
+        logging.error(f"Error creating playlist from file: {e}")
+        flash(f'Error creating playlist: {str(e)}', 'error')
+        return redirect(url_for('list_playlists'))
+
 @app.route('/create_playlists')
 def create_playlists():
     """Create Spotify playlists from S3 CSV files"""
     try:
         spotify_playlist.process_s3_playlists()
-        return "Playlists creation process started"
+        flash("Playlists creation process started", 'success')
+        return redirect(url_for('list_playlists'))
     except Exception as e:
         logging.error(f"Error in create_playlists route: {e}")
-        return f"Error creating playlists: {str(e)}", 500
+        flash(f"Error creating playlists: {str(e)}", 'error')
+        return redirect(url_for('list_playlists'))
 
 if __name__ == '__main__':
     # In development, use flask run command instead

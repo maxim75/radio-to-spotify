@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Radio Playlists</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .playlist-list {
+            list-style: none;
+            padding: 0;
+        }
+        .playlist-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+        }
+        .playlist-name {
+            font-size: 16px;
+            color: #333;
+        }
+        .add-button {
+            background-color: #1DB954;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .add-button:hover {
+            background-color: #1ed760;
+        }
+        .status-message {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+        .success {
+            background-color: #dff0d8;
+            color: #3c763d;
+            border: 1px solid #d6e9c6;
+        }
+        .error {
+            background-color: #f2dede;
+            color: #a94442;
+            border: 1px solid #ebccd1;
+        }
+    </style>
+</head>
+<body>
+    <h1>Radio Playlists</h1>
+    
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            {% for category, message in messages %}
+                <div class="status-message {{ category }}">{{ message }}</div>
+            {% endfor %}
+        {% endif %}
+    {% endwith %}
+    
+    <ul class="playlist-list">
+        {% for file in files %}
+        <li class="playlist-item">
+            <span class="playlist-name">{{ file }}</span>
+            <form action="{{ url_for('create_playlist_from_file') }}" method="post" style="display: inline;">
+                <input type="hidden" name="file_name" value="{{ file }}">
+                <button type="submit" class="add-button">Add to Spotify</button>
+            </form>
+        </li>
+        {% else %}
+        <li class="playlist-item">No playlist files found.</li>
+        {% endfor %}
+    </ul>
+</body>
+</html>
