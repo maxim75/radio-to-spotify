@@ -8,4 +8,3 @@ latest-user-agents
 APScheduler
 boto3
 botocore
-spotipy
