@@ -144,6 +144,8 @@ def list_playlists():
         flash(f"Error listing playlists: {str(e)}", 'error')
         return render_template('playlists.html', files=[])
 
+import uuid
+
 @app.route('/create_playlist_from_file', methods=['POST'])
 def create_playlist_from_file():
     """Create a Spotify playlist from a specific CSV file"""
@@ -151,6 +153,9 @@ def create_playlist_from_file():
         file_name = request.form.get('file_name')
         if not file_name:
             return {'status': 'error', 'message': 'No file name provided'}, 400
+
+        # Generate a task ID
+        task_id = str(uuid.uuid4())
 
         # Download CSV content
         csv_content = playlist_upload.download_file_from_s3("radio-playlists", file_name)
@@ -163,18 +168,19 @@ def create_playlist_from_file():
         # Create playlist name from file name (remove .csv extension)
         playlist_name = file_name.rsplit('.', 1)[0]
         
-        # Create the playlist
-        success = spotify_playlist.create_playlist_from_csv(csv_content, playlist_name)
+        # Start playlist creation with task ID
+        success = spotify_playlist.create_playlist_from_csv(csv_content, playlist_name, task_id)
         
         if success:
             return {
                 'status': 'success',
-                'message': f'Successfully created playlist: {playlist_name}'
+                'task_id': task_id,
+                'message': 'Started creating playlist'
             }
         else:
             return {
                 'status': 'error',
-                'message': f'Failed to create playlist: {playlist_name}'
+                'message': f'Failed to start playlist creation: {playlist_name}'
             }, 400
             
     except Exception as e:
@@ -183,6 +189,22 @@ def create_playlist_from_file():
             'status': 'error',
             'message': f'Error creating playlist: {str(e)}'
         }, 500
+
+@app.route('/playlist_progress/<task_id>')
+def playlist_progress(task_id):
+    """Get the progress of a playlist creation task"""
+    task = spotify_playlist.tasks.get(task_id)
+    if not task:
+        return {
+            'status': 'error',
+            'message': 'Task not found'
+        }, 404
+    
+    return {
+        'status': task.get('status', 'processing'),
+        'progress': task.get('progress', 0),
+        'message': task.get('message', 'Processing...')
+    }
 
 @app.route('/create_playlists')
 def create_playlists():

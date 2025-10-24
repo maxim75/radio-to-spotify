@@ -96,18 +96,30 @@ def search_track(sp, artist, track):
         logging.error(f"Error searching for track {track} by {artist}: {e}")
         return None
 
-def create_playlist_from_csv(csv_content, playlist_name):
+# Dictionary to store task progress
+tasks = {}
+
+def create_playlist_from_csv(csv_content, playlist_name, task_id):
     """
-    Create a Spotify playlist from CSV content
+    Create a Spotify playlist from CSV content with progress tracking
     """
     try:
+        # Initialize task progress
+        tasks[task_id] = {
+            'progress': 0,
+            'message': 'Initializing...',
+            'status': 'processing'
+        }
+
         # Create Spotify client
         sp = create_spotify_client()
         if not sp:
+            tasks[task_id].update({'status': 'error', 'message': 'Failed to create Spotify client'})
             return False
 
         # Get current user's ID
         user_id = sp.current_user()['id']
+        tasks[task_id].update({'progress': 5, 'message': 'Creating playlist...'})
         
         # Create new playlist
         playlist = sp.user_playlist_create(user_id, playlist_name, public=False)
@@ -115,21 +127,31 @@ def create_playlist_from_csv(csv_content, playlist_name):
         
         # Load CSV content into DataFrame
         df = pd.read_csv(StringIO(csv_content))
+        total_tracks = len(df)
         
-        logging.info(f"Creating playlist '{playlist_name}' with {len(df)} tracks")
-
-        logging.info(f"Dataframe columns: {df.columns}")
+        logging.info(f"Creating playlist '{playlist_name}' with {total_tracks} tracks")
+        tasks[task_id].update({'progress': 10, 'message': f'Found {total_tracks} tracks to process'})
 
         # Collect track URIs
         track_uris = []
-        for _, row in df.iterrows():
+        for index, row in df.iterrows():
             artist = row.get('artist_name', '')
             track = row.get('song_name', '')
             logging.info(f"Processing track: {track} by {artist}")
+            
+            # Update progress (10-70%)
+            progress = 10 + int((index / total_tracks) * 60)
+            tasks[task_id].update({
+                'progress': progress,
+                'message': f'Searching for track: {track} by {artist}'
+            })
+            
             if artist and track:
                 track_uri = search_track(sp, artist, track)
                 if track_uri:
                     track_uris.append(track_uri)
+
+        tasks[task_id].update({'progress': 80, 'message': 'Adding tracks to playlist...'})
         
         # Add tracks to playlist in batches
         if track_uris:
@@ -137,10 +159,25 @@ def create_playlist_from_csv(csv_content, playlist_name):
             for i in range(0, len(track_uris), batch_size):
                 batch = track_uris[i:i + batch_size]
                 sp.playlist_add_items(playlist_id, batch)
+                # Update progress (80-95%)
+                progress = 80 + int((i / len(track_uris)) * 15)
+                tasks[task_id].update({
+                    'progress': progress,
+                    'message': f'Adding tracks {i+1} to {min(i+batch_size, len(track_uris))}'
+                })
             
+            tasks[task_id].update({
+                'status': 'completed',
+                'progress': 100,
+                'message': f"Created playlist '{playlist_name}' with {len(track_uris)} tracks"
+            })
             logging.info(f"Created playlist '{playlist_name}' with {len(track_uris)} tracks")
             return True
         else:
+            tasks[task_id].update({
+                'status': 'error',
+                'message': f"No tracks found for playlist '{playlist_name}'"
+            })
             logging.warning(f"No tracks found for playlist '{playlist_name}'")
             return False
             
