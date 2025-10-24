@@ -150,14 +150,15 @@ def create_playlist_from_file():
     try:
         file_name = request.form.get('file_name')
         if not file_name:
-            flash('No file name provided', 'error')
-            return redirect(url_for('list_playlists'))
+            return {'status': 'error', 'message': 'No file name provided'}, 400
 
         # Download CSV content
         csv_content = playlist_upload.download_file_from_s3("radio-playlists", file_name)
         if not csv_content:
-            flash(f'Failed to download file: {file_name}', 'error')
-            return redirect(url_for('list_playlists'))
+            return {
+                'status': 'error',
+                'message': f'Failed to download file: {file_name}'
+            }, 400
 
         # Create playlist name from file name (remove .csv extension)
         playlist_name = file_name.rsplit('.', 1)[0]
@@ -166,16 +167,22 @@ def create_playlist_from_file():
         success = spotify_playlist.create_playlist_from_csv(csv_content, playlist_name)
         
         if success:
-            flash(f'Successfully created playlist: {playlist_name}', 'success')
+            return {
+                'status': 'success',
+                'message': f'Successfully created playlist: {playlist_name}'
+            }
         else:
-            flash(f'Failed to create playlist: {playlist_name}', 'error')
+            return {
+                'status': 'error',
+                'message': f'Failed to create playlist: {playlist_name}'
+            }, 400
             
-        return redirect(url_for('list_playlists'))
-        
     except Exception as e:
         logging.error(f"Error creating playlist from file: {e}")
-        flash(f'Error creating playlist: {str(e)}', 'error')
-        return redirect(url_for('list_playlists'))
+        return {
+            'status': 'error',
+            'message': f'Error creating playlist: {str(e)}'
+        }, 500
 
 @app.route('/create_playlists')
 def create_playlists():

@@ -32,9 +32,14 @@
             border-radius: 20px;
             cursor: pointer;
             font-size: 14px;
+            transition: all 0.3s ease;
         }
         .add-button:hover {
             background-color: #1ed760;
+        }
+        .add-button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
         }
         .button-group {
             display: flex;
@@ -54,6 +59,28 @@
         }
         .view-button:hover {
             background-color: #444;
+        }
+        .progress {
+            display: none;
+            align-items: center;
+            gap: 8px;
+            color: #666;
+            font-size: 14px;
+        }
+        .progress.active {
+            display: flex;
+        }
+        .progress-spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #1DB954;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
         }
         .status-message {
             padding: 10px;
@@ -89,15 +116,81 @@
             <span class="playlist-name">{{ file }}</span>
             <div class="button-group">
                 <a href="{{ url_for('view_playlist', file_name=file) }}" class="view-button">View</a>
-                <form action="{{ url_for('create_playlist_from_file') }}" method="post" style="display: inline;">
+                <form action="{{ url_for('create_playlist_from_file') }}" method="post" 
+                      style="display: inline;" onsubmit="return handleSubmit(this, '{{ file }}')">
                     <input type="hidden" name="file_name" value="{{ file }}">
-                    <button type="submit" class="add-button">Add to Spotify</button>
+                    <button type="submit" class="add-button" data-file="{{ file }}">Add to Spotify</button>
                 </form>
+                <div class="progress" id="progress-{{ file|replace('.', '-') }}">
+                    <div class="progress-spinner"></div>
+                    <span class="progress-text">Creating playlist...</span>
+                </div>
             </div>
         </li>
         {% else %}
         <li class="playlist-item">No playlist files found.</li>
         {% endfor %}
     </ul>
+
+    <script>
+        let activeForms = new Set();
+
+        function handleSubmit(form, fileName) {
+            if (activeForms.has(fileName)) {
+                return false;
+            }
+
+            const button = form.querySelector('button');
+            const progress = document.getElementById(`progress-${fileName.replace('.', '-')}`);
+            
+            // Disable button and show progress
+            button.disabled = true;
+            progress.classList.add('active');
+            activeForms.add(fileName);
+
+            // Submit the form using fetch
+            fetch(form.action, {
+                method: 'POST',
+                body: new FormData(form),
+                headers: {
+                    'Accept': 'application/json'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                // Handle response
+                if (data.status === 'success') {
+                    showMessage('success', data.message);
+                } else {
+                    showMessage('error', data.message);
+                }
+            })
+            .catch(error => {
+                showMessage('error', 'An error occurred while creating the playlist');
+            })
+            .finally(() => {
+                // Re-enable button and hide progress
+                button.disabled = false;
+                progress.classList.remove('active');
+                activeForms.delete(fileName);
+            });
+
+            return false;
+        }
+
+        function showMessage(type, message) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `status-message ${type}`;
+            messageDiv.textContent = message;
+
+            const container = document.querySelector('h1').nextElementSibling;
+            container.insertBefore(messageDiv, container.firstChild);
+
+            // Remove message after 5 seconds
+            setTimeout(() => {
+                messageDiv.remove();
+            }, 5000);
+        }
+    </script>
 </body>
 </html>
