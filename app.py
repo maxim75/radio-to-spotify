@@ -8,21 +8,38 @@ import load_playlist
 import playlist_upload
 import pandas as pd 
 import datetime
+import spotipy
+from spotipy.oauth2 import SpotifyOAuth
+
 
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID")
+FLASK_ENV = os.environ.get("FLASK_ENV")
+SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID")
+SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET")
 
 # Create a StreamHandler for console output
 console_handler = logging.StreamHandler()
 
 # Create a FileHandler for file output
-file_handler = logging.FileHandler('/var/log/app.log')
+if FLASK_ENV == "development":
+    handlers=[console_handler]
+else:
+    file_handler = logging.FileHandler('/var/log/app.log')
+    handlers=[console_handler, file_handler]
 
 logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s - %(levelname)s - %(message)s',
-                    handlers=[console_handler, file_handler]
+                    handlers=handlers
                     )
 
 logging.info('app.py script started')
+logging.info(f"SPOTIFY_CLIENT_ID: {SPOTIFY_CLIENT_ID}")
+logging.info(f"SPOTIFY_CLIENT_SECRET: {SPOTIFY_CLIENT_SECRET}")
+
+scope = "user-library-read playlist-modify-private playlist-modify-public"
+sp = spotipy.Spotify(auth_manager=SpotifyOAuth(scope=scope, client_id=SPOTIFY_CLIENT_ID,
+    client_secret=SPOTIFY_CLIENT_SECRET, redirect_uri="http://max.kozlenko.info"))
+
 
 app = Flask(__name__)
 
@@ -76,7 +93,11 @@ def config():
         return f"AWS_ACCESS_KEY_ID {AWS_ACCESS_KEY_ID[:4]}"
     else:
         return "AWS_ACCESS_KEY_ID is not set"
+    
+@app.route('/test')
+def test():
+    return "Test endpoint is working."
 
 if __name__ == '__main__':
-	app.run(host='0.0.0.0', port=8001)
+	app.run(host='0.0.0.0', port=8001) 
 	
