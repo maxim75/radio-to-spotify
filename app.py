@@ -11,6 +11,7 @@ import datetime
 import spotify_playlist
 from urllib.parse import urlencode
 from io import StringIO
+import uuid
 
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID")
 
@@ -39,7 +40,7 @@ logging.basicConfig(
 
 logging.info('app.py script started')
 
-app = Flask(__name__)
+app = Flask(__name__, static_url_path='/static', static_folder='static/dist')
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-secret-key')  # Set a secret key for session management
 
 def my_scheduled_job():
@@ -133,27 +134,33 @@ def config():
 
 @app.route('/playlists')
 def list_playlists():
-    """Show list of playlist files from S3"""
+    """Show the playlists page"""
+    return render_template('playlists.html')
+
+@app.route('/api/playlists')
+def api_list_playlists():
+    """API endpoint to get list of playlist files from S3"""
     try:
         files = playlist_upload.list_objects_in_bucket("radio-playlists")
         # Filter only CSV files and sort by name
         csv_files = sorted([f for f in files if f.endswith('.csv')])
-        return render_template('playlists.html', files=csv_files)
+        return {'status': 'success', 'playlists': csv_files}
     except Exception as e:
         logging.error(f"Error listing playlists: {e}")
-        flash(f"Error listing playlists: {str(e)}", 'error')
-        return render_template('playlists.html', files=[])
-
-import uuid
+        return {
+            'status': 'error',
+            'message': str(e)
+        }, 500
 
 @app.route('/create_playlist_from_file', methods=['POST'])
 def create_playlist_from_file():
     """Create a Spotify playlist from a specific CSV file"""
     try:
-        file_name = request.form.get('file_name')
-        if not file_name:
+        data = request.get_json()
+        if not data or 'file_name' not in data:
             return {'status': 'error', 'message': 'No file name provided'}, 400
 
+        file_name = data['file_name']
         # Generate a task ID
         task_id = str(uuid.uuid4())
 
