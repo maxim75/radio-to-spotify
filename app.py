@@ -92,10 +92,7 @@ scheduler.start()
 atexit.register(lambda: scheduler.shutdown())
 
 @app.route('/')
-def hello():
-    logging.warning('Hello, World! endpoint was reached')
-    logging.info('INFO')
-    logging.debug('debug')
+def index():
     return "Radio to Spotify!!"
 
 @app.route('/load_playlist')
