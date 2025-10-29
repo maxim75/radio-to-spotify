@@ -5,3 +5,5 @@ __pycache__/
 *.pyo
 *.pyd
 .env
+static/node_modules/
+static/dist/
