@@ -190,6 +190,12 @@ def create_playlist_from_csv(csv_content, playlist_name, task_id):
             
     except Exception as e:
         logging.error(f"Error creating playlist: {e}")
+        # Update task with error status
+        if task_id in tasks:
+            tasks[task_id].update({
+                'status': 'error',
+                'message': f'Error creating playlist: {str(e)}'
+            })
         return False
 
 def process_s3_playlists(bucket_name="radio-playlists"):

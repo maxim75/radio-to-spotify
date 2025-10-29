@@ -12,6 +12,7 @@ import spotify_playlist
 from urllib.parse import urlencode
 from io import StringIO
 import uuid
+import threading
 
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID")
 
@@ -172,20 +173,29 @@ def create_playlist_from_file():
         # Create playlist name from file name (remove .csv extension)
         playlist_name = file_name.rsplit('.', 1)[0]
         
-        # Start playlist creation with task ID
-        success = spotify_playlist.create_playlist_from_csv(csv_content, playlist_name, task_id)
+        # Start playlist creation in background thread
+        def run_playlist_creation():
+            try:
+                spotify_playlist.create_playlist_from_csv(csv_content, playlist_name, task_id)
+            except Exception as e:
+                logging.error(f"Error in background playlist creation: {e}")
+                # Update task with error status
+                if task_id in spotify_playlist.tasks:
+                    spotify_playlist.tasks[task_id].update({
+                        'status': 'error',
+                        'message': f'Error during playlist creation: {str(e)}'
+                    })
         
-        if success:
-            return {
-                'status': 'success',
-                'task_id': task_id,
-                'message': 'Started creating playlist'
-            }
-        else:
-            return {
-                'status': 'error',
-                'message': f'Failed to start playlist creation: {playlist_name}'
-            }, 400
+        # Start the background thread
+        thread = threading.Thread(target=run_playlist_creation)
+        thread.daemon = True  # Allow main thread to exit even if this is still running
+        thread.start()
+        
+        return {
+            'status': 'success',
+            'task_id': task_id,
+            'message': 'Started creating playlist'
+        }
             
     except Exception as e:
         logging.error(f"Error creating playlist from file: {e}")

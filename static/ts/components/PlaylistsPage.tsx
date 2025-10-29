@@ -5,6 +5,7 @@ import { PlaylistContainer, PlaylistList } from './styles';
 
 export const PlaylistsPage: React.FC = () => {
   const [files, setFiles] = useState<PlaylistFile[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
 
   useEffect(() => {
     fetchPlaylists();
@@ -12,6 +13,7 @@ export const PlaylistsPage: React.FC = () => {
 
   const fetchPlaylists = async () => {
     try {
+      setIsLoading(true);
       const response = await fetch('/api/playlists');
       const data = await response.json();
       if (data.status === 'success') {
@@ -21,6 +23,8 @@ export const PlaylistsPage: React.FC = () => {
       }
     } catch (error) {
       console.error('Error fetching playlists:', error);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -31,7 +35,10 @@ export const PlaylistsPage: React.FC = () => {
         {files.map((file) => (
           <PlaylistItem key={file.name} file={file} />
         ))}
-        {files.length === 0 && (
+        {isLoading && (
+          <li>Playlists loading...</li>
+        )}
+        {!isLoading && files.length === 0 && (
           <li>No playlist files found.</li>
         )}
       </PlaylistList>
