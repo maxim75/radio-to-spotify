@@ -17,26 +17,12 @@ SPOTIPY_CLIENT_SECRET = os.environ.get('SPOTIPY_CLIENT_SECRET')
 SPOTIPY_REDIRECT_URI = os.environ.get('SPOTIPY_REDIRECT_URI')
 SPOTIFY_USERNAME = os.environ.get('SPOTIFY_USERNAME')
 
-def get_auth_url():
+def create_spotify_auth_manager():
     """
-    Get the Spotify authorization URL
+    Create and return a configured SpotifyOAuth auth manager
     """
     scope = "playlist-modify-public playlist-modify-private"
-    auth_manager = SpotifyOAuth(
-        client_id=SPOTIPY_CLIENT_ID,
-        client_secret=SPOTIPY_CLIENT_SECRET,
-        redirect_uri=SPOTIPY_REDIRECT_URI,
-        scope=scope,
-        username=SPOTIFY_USERNAME
-    )
-    return auth_manager.get_authorize_url()
-
-def handle_oauth_callback(code):
-    """
-    Handle the OAuth callback and get access token
-    """
     try:
-        scope = "playlist-modify-public playlist-modify-private"
         auth_manager = SpotifyOAuth(
             client_id=SPOTIPY_CLIENT_ID,
             client_secret=SPOTIPY_CLIENT_SECRET,
@@ -44,6 +30,30 @@ def handle_oauth_callback(code):
             scope=scope,
             username=SPOTIFY_USERNAME
         )
+        return auth_manager
+    except Exception as e:
+        logging.error(f"Error creating Spotify auth manager: {e}")
+        return None
+
+def get_auth_url():
+    """
+    Get the Spotify authorization URL
+    """
+    auth_manager = create_spotify_auth_manager()
+    if not auth_manager:
+        logging.error("Failed to create auth manager for auth URL")
+        return None
+    return auth_manager.get_authorize_url()
+
+def handle_oauth_callback(code):
+    """
+    Handle the OAuth callback and get access token
+    """
+    try:
+        auth_manager = create_spotify_auth_manager()
+        if not auth_manager:
+            logging.error("Failed to create auth manager for OAuth callback")
+            return False
         
         # Get the access token
         token_info = auth_manager.get_access_token(code)
@@ -64,15 +74,12 @@ def create_spotify_client():
     """
     Create authenticated Spotify client
     """
-    scope = "playlist-modify-public playlist-modify-private"
     try:
-        auth_manager = SpotifyOAuth(
-            client_id=SPOTIPY_CLIENT_ID,
-            client_secret=SPOTIPY_CLIENT_SECRET,
-            redirect_uri=SPOTIPY_REDIRECT_URI,
-            scope=scope,
-            username=SPOTIFY_USERNAME
-        )
+        auth_manager = create_spotify_auth_manager()
+        if not auth_manager:
+            logging.error("Failed to create auth manager for Spotify client")
+            return None
+            
         sp = spotipy.Spotify(auth_manager=auth_manager)
         return sp
     except Exception as e:
