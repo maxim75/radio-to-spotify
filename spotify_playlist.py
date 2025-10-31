@@ -21,7 +21,7 @@ def create_spotify_auth_manager():
     """
     Create and return a configured SpotifyOAuth auth manager
     """
-    scope = "playlist-modify-public playlist-modify-private"
+    scope = "playlist-modify-public playlist-modify-private playlist-read-private"
     try:
         auth_manager = SpotifyOAuth(
             client_id=SPOTIPY_CLIENT_ID,
