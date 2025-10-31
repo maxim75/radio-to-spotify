@@ -94,7 +94,8 @@ atexit.register(lambda: scheduler.shutdown())
 
 @app.route('/')
 def index():
-    return "Radio to Spotify!!"
+    """Serve the main React application"""
+    return render_template('playlists.html', title="Radio to Spotify")
 
 @app.route('/load_playlist')
 def load_playlist_route():
@@ -231,6 +232,31 @@ def create_playlists():
         logging.error(f"Error in create_playlists route: {e}")
         flash(f"Error creating playlists: {str(e)}", 'error')
         return redirect(url_for('list_playlists'))
+
+@app.route('/spotify_playlists')
+def get_spotify_playlists():
+    """Get all user playlists from Spotify account as JSON response"""
+    try:
+        playlists = spotify_playlist.get_user_playlists()
+        
+        if playlists is None:
+            return {
+                'status': 'error',
+                'message': 'Failed to retrieve playlists from Spotify. Make sure you are authenticated with Spotify.'
+            }, 500
+        
+        return {
+            'status': 'success',
+            'playlists': playlists,
+            'total': len(playlists)
+        }
+        
+    except Exception as e:
+        logging.error(f"Error getting Spotify playlists: {e}")
+        return {
+            'status': 'error',
+            'message': f'Error retrieving Spotify playlists: {str(e)}'
+        }, 500
 
 @app.route('/playlists/view/<path:file_name>')
 def view_playlist(file_name):

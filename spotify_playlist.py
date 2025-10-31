@@ -198,6 +198,55 @@ def create_playlist_from_csv(csv_content, playlist_name, task_id):
             })
         return False
 
+def get_user_playlists():
+    """
+    Get all playlists for the authenticated user
+    """
+    try:
+        sp = create_spotify_client()
+        if not sp:
+            logging.error("Failed to create Spotify client for getting playlists")
+            return None
+            
+        # Get current user info
+        user = sp.current_user()
+        user_id = user['id']
+        
+        # Get all user playlists
+        playlists = []
+        results = sp.user_playlists(user_id)
+        
+        while results:
+            for item in results['items']:
+                playlist_info = {
+                    'id': item['id'],
+                    'name': item['name'],
+                    'description': item.get('description', ''),
+                    'public': item['public'],
+                    'collaborative': item['collaborative'],
+                    'tracks_total': item['tracks']['total'],
+                    'owner': item['owner']['display_name'],
+                    'owner_id': item['owner']['id'],
+                    'href': item['href'],
+                    'external_url': item['external_urls']['spotify'],
+                    'images': item['images'],
+                    'snapshot_id': item['snapshot_id']
+                }
+                playlists.append(playlist_info)
+            
+            # Check if there are more playlists to fetch
+            if results['next']:
+                results = sp.next(results)
+            else:
+                break
+                
+        logging.info(f"Retrieved {len(playlists)} playlists for user {user_id}")
+        return playlists
+        
+    except Exception as e:
+        logging.error(f"Error getting user playlists: {e}")
+        return None
+
 def process_s3_playlists(bucket_name="radio-playlists"):
     """
     Process all CSV files in the S3 bucket and create Spotify playlists
