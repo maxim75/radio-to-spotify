@@ -7,3 +7,5 @@ __pycache__/
 .env
 static/node_modules/
 static/dist/
+logs/
+.cache*

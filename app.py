@@ -97,6 +97,11 @@ def index():
     """Serve the main React application"""
     return render_template('playlists.html', title="Radio to Spotify")
 
+@app.route('/spotify')
+def spotify_page():
+    """Serve the React application for Spotify playlists page"""
+    return render_template('playlists.html', title="Spotify Playlists")
+
 @app.route('/load_playlist')
 def load_playlist_route():
     playlist_filename = load_playlist.load_playlist()
