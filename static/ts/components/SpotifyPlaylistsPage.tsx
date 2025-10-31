@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { SpotifyPlaylist } from '../types';
-import { PlaylistContainer, PlaylistList } from './styles';
+import { SpotifyPlaylist, MergeProgress } from '../types';
+import { PlaylistContainer, PlaylistList, PlaylistActions, MergeButton, DropdownContainer, DropdownMenu, DropdownItem } from './styles';
+import { ProgressBar } from './ProgressBar';
 
 export const SpotifyPlaylistsPage: React.FC = () => {
   const [playlists, setPlaylists] = useState<SpotifyPlaylist[]>([]);
@@ -8,6 +9,9 @@ export const SpotifyPlaylistsPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [itemsPerPage, setItemsPerPage] = useState<number>(20);
+  const [mergeProgress, setMergeProgress] = useState<{ [playlistId: string]: MergeProgress }>({});
+  const [dropdownOpen, setDropdownOpen] = useState<string | null>(null);
+  const [mergingPlaylists, setMergingPlaylists] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     fetchSpotifyPlaylists();
@@ -59,6 +63,130 @@ export const SpotifyPlaylistsPage: React.FC = () => {
     setItemsPerPage(newItemsPerPage);
     setCurrentPage(1); // Reset to first page when changing items per page
   };
+
+  const handleMergeClick = (e: React.MouseEvent, playlistId: string) => {
+    e.stopPropagation(); // Prevent opening the playlist
+    setDropdownOpen(dropdownOpen === playlistId ? null : playlistId);
+  };
+
+  const handlePlaylistSelect = async (e: React.MouseEvent, sourcePlaylistId: string, targetPlaylistId: string) => {
+    e.stopPropagation();
+    setDropdownOpen(null);
+    
+    // Don't merge with itself
+    if (sourcePlaylistId === targetPlaylistId) {
+      return;
+    }
+
+    setMergingPlaylists(prev => new Set(prev).add(sourcePlaylistId));
+    
+    try {
+      const response = await fetch('/merge_playlists', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({
+          source_playlist_id: sourcePlaylistId,
+          target_playlist_id: targetPlaylistId
+        })
+      });
+
+      const data = await response.json();
+      
+      if (data.status === 'success') {
+        const taskId = data.task_id;
+        pollMergeProgress(taskId, sourcePlaylistId);
+      } else {
+        setMergeProgress(prev => ({
+          ...prev,
+          [sourcePlaylistId]: {
+            status: 'error',
+            progress: 0,
+            message: data.message
+          }
+        }));
+        setMergingPlaylists(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(sourcePlaylistId);
+          return newSet;
+        });
+      }
+    } catch (error) {
+      setMergeProgress(prev => ({
+        ...prev,
+        [sourcePlaylistId]: {
+          status: 'error',
+          progress: 0,
+          message: 'An error occurred while merging playlists'
+        }
+      }));
+      setMergingPlaylists(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(sourcePlaylistId);
+        return newSet;
+      });
+    }
+  };
+
+  const pollMergeProgress = async (taskId: string, playlistId: string) => {
+    const poll = setInterval(async () => {
+      try {
+        const response = await fetch(`/playlist_progress/${taskId}`);
+        const data = await response.json();
+
+        setMergeProgress(prev => ({
+          ...prev,
+          [playlistId]: {
+            status: data.status,
+            progress: data.progress,
+            message: data.message
+          }
+        }));
+
+        if (data.status === 'completed' || data.status === 'error') {
+          clearInterval(poll);
+          setMergingPlaylists(prev => {
+            const newSet = new Set(prev);
+            newSet.delete(playlistId);
+            return newSet;
+          });
+          
+          // Clear progress after 5 seconds
+          setTimeout(() => {
+            setMergeProgress(prev => {
+              const newProgress = { ...prev };
+              delete newProgress[playlistId];
+              return newProgress;
+            });
+          }, 5000);
+        }
+      } catch (error) {
+        clearInterval(poll);
+        setMergeProgress(prev => ({
+          ...prev,
+          [playlistId]: {
+            status: 'error',
+            progress: 0,
+            message: 'Error checking merge progress'
+          }
+        }));
+        setMergingPlaylists(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(playlistId);
+          return newSet;
+        });
+      }
+    }, 1000);
+  };
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = () => setDropdownOpen(null);
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, []);
 
   return (
     <PlaylistContainer>
@@ -182,9 +310,50 @@ export const SpotifyPlaylistsPage: React.FC = () => {
               </div>
             </div>
 
-            <div style={{ fontSize: '12px', color: '#1db954' }}>
-              Open in Spotify →
-            </div>
+            <PlaylistActions>
+              <DropdownContainer>
+                <MergeButton
+                  onClick={(e) => handleMergeClick(e, playlist.id)}
+                  disabled={mergingPlaylists.has(playlist.id)}
+                >
+                  {mergingPlaylists.has(playlist.id) ? 'Merging...' : 'Merge'}
+                </MergeButton>
+                <DropdownMenu isOpen={dropdownOpen === playlist.id}>
+                  {playlists
+                    .filter(p => p.id !== playlist.id) // Don't show self in dropdown
+                    .map(targetPlaylist => (
+                      <DropdownItem
+                        key={targetPlaylist.id}
+                        onClick={(e) => handlePlaylistSelect(e, playlist.id, targetPlaylist.id)}
+                      >
+                        <div className="playlist-name">{targetPlaylist.name}</div>
+                        <div className="playlist-details">
+                          {targetPlaylist.tracks_total} tracks • By {targetPlaylist.owner}
+                        </div>
+                      </DropdownItem>
+                    ))}
+                </DropdownMenu>
+              </DropdownContainer>
+              
+              {mergeProgress[playlist.id] && (
+                <div style={{ marginLeft: '10px', minWidth: '200px' }}>
+                  <ProgressBar 
+                    active={mergeProgress[playlist.id].status === 'processing'} 
+                    progress={mergeProgress[playlist.id]}
+                  />
+                </div>
+              )}
+              
+              <div 
+                style={{ fontSize: '12px', color: '#1db954', cursor: 'pointer' }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openSpotifyPlaylist(playlist.external_url);
+                }}
+              >
+                Open in Spotify →
+              </div>
+            </PlaylistActions>
           </li>
         ))}
       </PlaylistList>

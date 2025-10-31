@@ -28,3 +28,17 @@ export interface Task {
   status: string;
   message: string;
 }
+
+export interface SpotifyTrack {
+  id: string;
+  name: string;
+  artist: string;
+  uri: string;
+  album: string;
+}
+
+export interface MergeProgress {
+  status: 'processing' | 'completed' | 'error';
+  progress: number;
+  message: string;
+}

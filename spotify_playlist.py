@@ -247,6 +247,127 @@ def get_user_playlists():
         logging.error(f"Error getting user playlists: {e}")
         return None
 
+def get_playlist_tracks(playlist_id):
+    """
+    Get all tracks from a specific playlist
+    """
+    try:
+        sp = create_spotify_client()
+        if not sp:
+            logging.error("Failed to create Spotify client for getting playlist tracks")
+            return None
+            
+        tracks = []
+        results = sp.playlist_tracks(playlist_id)
+        
+        while results:
+            for item in results['items']:
+                track = item['track']
+                if track:  # Handle deleted tracks
+                    track_info = {
+                        'id': track['id'],
+                        'name': track['name'],
+                        'artist': track['artists'][0]['name'] if track['artists'] else '',
+                        'uri': track['uri'],
+                        'album': track['album']['name'] if track['album'] else ''
+                    }
+                    tracks.append(track_info)
+            
+            # Check if there are more tracks to fetch
+            if results['next']:
+                results = sp.next(results)
+            else:
+                break
+                
+        logging.info(f"Retrieved {len(tracks)} tracks from playlist {playlist_id}")
+        return tracks
+        
+    except Exception as e:
+        logging.error(f"Error getting playlist tracks: {e}")
+        return None
+
+def merge_playlists(source_playlist_id, target_playlist_id, task_id):
+    """
+    Merge tracks from source playlist to target playlist without duplicates
+    """
+    try:
+        # Initialize task progress
+        tasks[task_id] = {
+            'progress': 0,
+            'message': 'Initializing merge...',
+            'status': 'processing'
+        }
+
+        sp = create_spotify_client()
+        if not sp:
+            tasks[task_id].update({'status': 'error', 'message': 'Failed to create Spotify client'})
+            return False
+
+        tasks[task_id].update({'progress': 10, 'message': 'Getting source playlist tracks...'})
+        
+        # Get tracks from both playlists
+        source_tracks = get_playlist_tracks(source_playlist_id)
+        if not source_tracks:
+            tasks[task_id].update({'status': 'error', 'message': 'Failed to get source playlist tracks'})
+            return False
+
+        tasks[task_id].update({'progress': 30, 'message': 'Getting target playlist tracks...'})
+        
+        target_tracks = get_playlist_tracks(target_playlist_id)
+        if target_tracks is None:  # None means error, empty list is ok
+            tasks[task_id].update({'status': 'error', 'message': 'Failed to get target playlist tracks'})
+            return False
+
+        tasks[task_id].update({'progress': 50, 'message': 'Finding new tracks to add...'})
+        
+        # Create a set of existing track URIs in target playlist for quick lookup
+        target_track_uris = {track['uri'] for track in target_tracks}
+        
+        # Find tracks that are not already in target playlist
+        new_tracks = [track for track in source_tracks if track['uri'] not in target_track_uris]
+        
+        if not new_tracks:
+            tasks[task_id].update({
+                'status': 'completed',
+                'progress': 100,
+                'message': 'No new tracks to add - all tracks already exist in target playlist'
+            })
+            return True
+
+        tasks[task_id].update({'progress': 60, 'message': f'Adding {len(new_tracks)} new tracks to target playlist...'})
+        
+        # Add new tracks to target playlist in batches
+        new_track_uris = [track['uri'] for track in new_tracks]
+        batch_size = 100  # Spotify API limit
+        
+        for i in range(0, len(new_track_uris), batch_size):
+            batch = new_track_uris[i:i + batch_size]
+            sp.playlist_add_items(target_playlist_id, batch)
+            
+            # Update progress (60-95%)
+            progress = 60 + int((i / len(new_track_uris)) * 35)
+            tasks[task_id].update({
+                'progress': progress,
+                'message': f'Adding tracks {i+1} to {min(i+batch_size, len(new_track_uris))}'
+            })
+        
+        tasks[task_id].update({
+            'status': 'completed',
+            'progress': 100,
+            'message': f'Successfully merged {len(new_tracks)} new tracks to target playlist'
+        })
+        logging.info(f"Successfully merged {len(new_tracks)} new tracks to playlist {target_playlist_id}")
+        return True
+        
+    except Exception as e:
+        logging.error(f"Error merging playlists: {e}")
+        if task_id in tasks:
+            tasks[task_id].update({
+                'status': 'error',
+                'message': f'Error merging playlists: {str(e)}'
+            })
+        return False
+
 def process_s3_playlists(bucket_name="radio-playlists"):
     """
     Process all CSV files in the S3 bucket and create Spotify playlists

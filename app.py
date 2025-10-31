@@ -226,6 +226,76 @@ def playlist_progress(task_id):
         'message': task.get('message', 'Processing...')
     }
 
+@app.route('/playlist/<playlist_id>/tracks')
+def get_playlist_tracks(playlist_id):
+    """Get all tracks from a specific playlist"""
+    try:
+        tracks = spotify_playlist.get_playlist_tracks(playlist_id)
+        
+        if tracks is None:
+            return {
+                'status': 'error',
+                'message': 'Failed to retrieve playlist tracks. Make sure you are authenticated with Spotify.'
+            }, 500
+        
+        return {
+            'status': 'success',
+            'tracks': tracks,
+            'total': len(tracks)
+        }
+        
+    except Exception as e:
+        logging.error(f"Error getting playlist tracks: {e}")
+        return {
+            'status': 'error',
+            'message': f'Error retrieving playlist tracks: {str(e)}'
+        }, 500
+
+@app.route('/merge_playlists', methods=['POST'])
+def merge_playlists():
+    """Merge tracks from source playlist to target playlist"""
+    try:
+        data = request.get_json()
+        if not data or 'source_playlist_id' not in data or 'target_playlist_id' not in data:
+            return {'status': 'error', 'message': 'Source and target playlist IDs are required'}, 400
+
+        source_playlist_id = data['source_playlist_id']
+        target_playlist_id = data['target_playlist_id']
+        
+        # Generate a task ID
+        task_id = str(uuid.uuid4())
+
+        # Start playlist merging in background thread
+        def run_merge_process():
+            try:
+                spotify_playlist.merge_playlists(source_playlist_id, target_playlist_id, task_id)
+            except Exception as e:
+                logging.error(f"Error in background playlist merging: {e}")
+                # Update task with error status
+                if task_id in spotify_playlist.tasks:
+                    spotify_playlist.tasks[task_id].update({
+                        'status': 'error',
+                        'message': f'Error during playlist merging: {str(e)}'
+                    })
+        
+        # Start the background thread
+        thread = threading.Thread(target=run_merge_process)
+        thread.daemon = True  # Allow main thread to exit even if this is still running
+        thread.start()
+        
+        return {
+            'status': 'success',
+            'task_id': task_id,
+            'message': 'Started merging playlists'
+        }
+            
+    except Exception as e:
+        logging.error(f"Error merging playlists: {e}")
+        return {
+            'status': 'error',
+            'message': f'Error merging playlists: {str(e)}'
+        }, 500
+
 @app.route('/create_playlists')
 def create_playlists():
     """Create Spotify playlists from S3 CSV files"""

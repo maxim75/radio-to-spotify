@@ -127,3 +127,72 @@ export const StatusMessage = styled.div<{ type: 'success' | 'error' }>`
   color: ${props => props.type === 'success' ? '#3c763d' : '#a94442'};
   border: 1px solid ${props => props.type === 'success' ? '#d6e9c6' : '#ebccd1'};
 `;
+
+export const MergeButton = styled.button<{ disabled?: boolean }>`
+  background-color: ${props => props.disabled ? '#ccc' : '#ff6b35'};
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 20px;
+  cursor: ${props => props.disabled ? 'not-allowed' : 'pointer'};
+  font-size: 14px;
+  transition: all 0.3s ease;
+  margin-left: 10px;
+
+  &:hover {
+    background-color: ${props => props.disabled ? '#ccc' : '#ff5722'};
+  }
+`;
+
+export const DropdownContainer = styled.div`
+  position: relative;
+  display: inline-block;
+`;
+
+export const DropdownMenu = styled.div<{ isOpen: boolean }>`
+  position: absolute;
+  top: 100%;
+  left: 0;
+  background-color: white;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+  z-index: 1000;
+  min-width: 250px;
+  max-height: 300px;
+  overflow-y: auto;
+  display: ${props => props.isOpen ? 'block' : 'none'};
+  margin-top: 5px;
+`;
+
+export const DropdownItem = styled.div`
+  padding: 10px 15px;
+  cursor: pointer;
+  border-bottom: 1px solid #eee;
+  font-size: 14px;
+  
+  &:last-child {
+    border-bottom: none;
+  }
+  
+  &:hover {
+    background-color: #f5f5f5;
+  }
+  
+  .playlist-name {
+    font-weight: bold;
+    color: #333;
+  }
+  
+  .playlist-details {
+    font-size: 12px;
+    color: #666;
+    margin-top: 2px;
+  }
+`;
+
+export const PlaylistActions = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 10px;
+`;
