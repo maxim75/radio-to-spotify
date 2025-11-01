@@ -44,6 +44,14 @@ logging.info('app.py script started')
 app = Flask(__name__, static_url_path='/static', static_folder='static/dist')
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-secret-key')  # Set a secret key for session management
 
+# Configure session settings for security
+app.config.update(
+    SESSION_COOKIE_SECURE=False,  # Set to True in production with HTTPS
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    PERMANENT_SESSION_LIFETIME=datetime.timedelta(hours=1)  # Session expires after 1 hour
+)
+
 def my_scheduled_job():
     load_playlist_route()
 
@@ -84,6 +92,37 @@ def spotify_callback():
     except Exception as e:
         logging.error(f"Error in Spotify callback: {e}")
         return f"Error processing callback: {str(e)}", 500
+
+@app.route('/spotify/logout')
+def spotify_logout():
+    """Logout from Spotify and clear token"""
+    try:
+        success = spotify_playlist.clear_spotify_token()
+        if success:
+            flash("Successfully logged out from Spotify", 'success')
+        else:
+            flash("No active Spotify session to logout", 'info')
+        return redirect(url_for('list_playlists'))
+    except Exception as e:
+        logging.error(f"Error in Spotify logout: {e}")
+        flash(f"Error logging out: {str(e)}", 'error')
+        return redirect(url_for('list_playlists'))
+
+@app.route('/spotify/status')
+def spotify_status():
+    """Check Spotify authentication status"""
+    try:
+        is_auth = spotify_playlist.is_authenticated()
+        return {
+            'authenticated': is_auth,
+            'message': 'Authenticated with Spotify' if is_auth else 'Not authenticated with Spotify'
+        }
+    except Exception as e:
+        logging.error(f"Error checking Spotify status: {e}")
+        return {
+            'authenticated': False,
+            'message': f'Error checking status: {str(e)}'
+        }, 500
 
 
 scheduler = BackgroundScheduler()

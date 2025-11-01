@@ -1,10 +1,13 @@
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
+from spotipy.cache_handler import CacheHandler
 import os
 import logging
 import pandas as pd
+import time
 from io import StringIO
 from playlist_upload import download_file_from_s3, list_objects_in_bucket
+from flask import session
 
 # Load environment variables if .env file exists
 if os.path.exists('.env'):
@@ -17,18 +20,42 @@ SPOTIPY_CLIENT_SECRET = os.environ.get('SPOTIPY_CLIENT_SECRET')
 SPOTIPY_REDIRECT_URI = os.environ.get('SPOTIPY_REDIRECT_URI')
 SPOTIFY_USERNAME = os.environ.get('SPOTIFY_USERNAME')
 
+class SessionCacheHandler(CacheHandler):
+    """
+    Custom cache handler that stores Spotify tokens in Flask session
+    """
+    def __init__(self, flask_session=None):
+        self.session = flask_session or session
+
+    def get_cached_token(self):
+        """Get token from Flask session"""
+        return self.session.get('spotify_token_info')
+
+    def save_token_to_cache(self, token_info):
+        """Save token to Flask session"""
+        self.session['spotify_token_info'] = token_info
+        # Mark session as modified to ensure it gets saved
+        self.session.permanent = True
+
+    def is_token_expired(self, token_info):
+        """Check if token is expired"""
+        now = int(time.time())
+        return token_info['expires_at'] - now < 60
+
 def create_spotify_auth_manager():
     """
-    Create and return a configured SpotifyOAuth auth manager
+    Create and return a configured SpotifyOAuth auth manager with session-based cache
     """
     scope = "playlist-modify-public playlist-modify-private playlist-read-private"
     try:
+        cache_handler = SessionCacheHandler()
         auth_manager = SpotifyOAuth(
             client_id=SPOTIPY_CLIENT_ID,
             client_secret=SPOTIPY_CLIENT_SECRET,
             redirect_uri=SPOTIPY_REDIRECT_URI,
             scope=scope,
-            username=SPOTIFY_USERNAME
+            cache_handler=cache_handler,
+            #username=SPOTIFY_USERNAME
         )
         return auth_manager
     except Exception as e:
@@ -386,6 +413,70 @@ def merge_playlists(source_playlist_id, target_playlist_id, task_id):
                 'message': f'Error merging playlists: {str(e)}'
             })
         return False
+
+def clear_spotify_token():
+    """
+    Clear Spotify token from session
+    """
+    try:
+        if 'spotify_token_info' in session:
+            del session['spotify_token_info']
+            logging.info("Spotify token cleared from session")
+            return True
+        return False
+    except Exception as e:
+        logging.error(f"Error clearing Spotify token: {e}")
+        return False
+
+def is_authenticated():
+    """
+    Check if user is authenticated with Spotify
+    """
+    try:
+        cache_handler = SessionCacheHandler()
+        token_info = cache_handler.get_cached_token()
+        
+        if not token_info:
+            return False
+            
+        # Check if token is expired
+        if cache_handler.is_token_expired(token_info):
+            logging.info("Spotify token is expired")
+            return False
+            
+        return True
+    except Exception as e:
+        logging.error(f"Error checking authentication status: {e}")
+        return False
+
+def refresh_token_if_needed():
+    """
+    Refresh Spotify token if needed
+    """
+    try:
+        cache_handler = SessionCacheHandler()
+        token_info = cache_handler.get_cached_token()
+        
+        if not token_info:
+            return None
+            
+        # Check if token needs refresh (expires within 60 seconds)
+        if cache_handler.is_token_expired(token_info):
+            logging.info("Refreshing Spotify token...")
+            auth_manager = create_spotify_auth_manager()
+            
+            # Refresh the token
+            refreshed_token = auth_manager.refresh_access_token(token_info['refresh_token'])
+            
+            # Save the refreshed token
+            cache_handler.save_token_to_cache(refreshed_token)
+            logging.info("Spotify token refreshed successfully")
+            return refreshed_token
+            
+        return token_info
+    except Exception as e:
+        logging.error(f"Error refreshing token: {e}")
+        return None
 
 def process_s3_playlists(bucket_name="radio-playlists"):
     """
