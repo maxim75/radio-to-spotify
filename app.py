@@ -53,7 +53,33 @@ app.config.update(
 )
 
 def my_scheduled_job():
-    load_playlist_route()
+    """Scheduled job to load playlists without Flask context"""
+    try:
+        # Load playlist data (same logic as load_playlist_route but without Flask response)
+        playlist_filename = load_playlist.load_playlist()
+        playlist_upload.upload_file_to_s3(
+            playlist_filename,
+            "radio-playlists",
+            playlist_filename.split("/")[-1]
+        )
+
+        for station_id in [75885, 309175, 294683]:
+            current_datetime = datetime.datetime.now()
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            current_date = current_datetime.strftime("%Y-%m-%d")
+            yesterday_date = (current_datetime - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+            playlist_df = load_playlist.get_playlist_from_raddio(station_id, yesterday_date)
+            filename = f"/var/data/playlist_{station_id}_{timestamp}.csv"
+            playlist_df.to_csv(filename, index=False)
+            playlist_upload.upload_file_to_s3(
+                filename,
+                "radio-playlists",
+                filename.split("/")[-1]
+            )
+        
+        logging.info("Scheduled playlist loading completed successfully")
+    except Exception as e:
+        logging.error(f"Error in scheduled playlist loading: {e}")
 
 @app.route('/spotify/auth')
 def spotify_auth():
@@ -97,7 +123,7 @@ def spotify_callback():
 def spotify_logout():
     """Logout from Spotify and clear token"""
     try:
-        success = spotify_playlist.clear_spotify_token()
+        success = spotify_playlist.clear_spotify_token(dict(session))
         if success:
             flash("Successfully logged out from Spotify", 'success')
         else:
@@ -112,7 +138,7 @@ def spotify_logout():
 def spotify_status():
     """Check Spotify authentication status"""
     try:
-        is_auth = spotify_playlist.is_authenticated()
+        is_auth = spotify_playlist.is_authenticated(dict(session))
         return {
             'authenticated': is_auth,
             'message': 'Authenticated with Spotify' if is_auth else 'Not authenticated with Spotify'
@@ -221,7 +247,9 @@ def create_playlist_from_file():
         # Start playlist creation in background thread
         def run_playlist_creation():
             try:
-                spotify_playlist.create_playlist_from_csv(csv_content, playlist_name, task_id)
+                # Copy session data to make it available in the background thread
+                session_data = dict(session)
+                spotify_playlist.create_playlist_from_csv(csv_content, playlist_name, task_id, session_data)
             except Exception as e:
                 logging.error(f"Error in background playlist creation: {e}")
                 # Update task with error status
@@ -269,7 +297,7 @@ def playlist_progress(task_id):
 def get_playlist_tracks(playlist_id):
     """Get all tracks from a specific playlist"""
     try:
-        tracks = spotify_playlist.get_playlist_tracks(playlist_id)
+        tracks = spotify_playlist.get_playlist_tracks_with_session(playlist_id, dict(session))
         
         if tracks is None:
             return {
@@ -307,7 +335,9 @@ def merge_playlists():
         # Start playlist merging in background thread
         def run_merge_process():
             try:
-                spotify_playlist.merge_playlists(source_playlist_id, target_playlist_id, task_id)
+                # Copy session data to make it available in the background thread
+                session_data = dict(session)
+                spotify_playlist.merge_playlists(source_playlist_id, target_playlist_id, task_id, session_data)
             except Exception as e:
                 logging.error(f"Error in background playlist merging: {e}")
                 # Update task with error status
@@ -351,7 +381,7 @@ def create_playlists():
 def get_spotify_playlists():
     """Get all user playlists from Spotify account as JSON response"""
     try:
-        playlists = spotify_playlist.get_user_playlists()
+        playlists = spotify_playlist.get_user_playlists_with_session(dict(session))
         
         if playlists is None:
             return {

@@ -7,7 +7,6 @@ import pandas as pd
 import time
 from io import StringIO
 from playlist_upload import download_file_from_s3, list_objects_in_bucket
-from flask import session
 
 # Load environment variables if .env file exists
 if os.path.exists('.env'):
@@ -22,33 +21,41 @@ SPOTIFY_USERNAME = os.environ.get('SPOTIFY_USERNAME')
 
 class SessionCacheHandler(CacheHandler):
     """
-    Custom cache handler that stores Spotify tokens in Flask session
+    Custom cache handler that stores Spotify tokens in Flask session or dictionary
     """
     def __init__(self, flask_session=None):
-        self.session = flask_session or session
+        # Always use the provided session_data, never default to Flask session
+        # This prevents "Working outside of request context" errors in background threads
+        if flask_session is not None:
+            self.session = flask_session
+        else:
+            # If no session provided, use an empty dictionary to avoid Flask session access
+            self.session = {}
 
     def get_cached_token(self):
-        """Get token from Flask session"""
+        """Get token from Flask session or dictionary"""
         return self.session.get('spotify_token_info')
 
     def save_token_to_cache(self, token_info):
-        """Save token to Flask session"""
+        """Save token to Flask session or dictionary"""
         self.session['spotify_token_info'] = token_info
-        # Mark session as modified to ensure it gets saved
-        self.session.permanent = True
+        # Mark session as modified to ensure it gets saved (only for Flask session)
+        if hasattr(self.session, 'permanent'):
+            self.session.permanent = True
 
     def is_token_expired(self, token_info):
         """Check if token is expired"""
         now = int(time.time())
         return token_info['expires_at'] - now < 60
 
-def create_spotify_auth_manager():
+def create_spotify_auth_manager(session_data=None):
     """
     Create and return a configured SpotifyOAuth auth manager with session-based cache
     """
     scope = "playlist-modify-public playlist-modify-private playlist-read-private"
     try:
-        cache_handler = SessionCacheHandler()
+        # Always provide session data to avoid Flask session access in background threads
+        cache_handler = SessionCacheHandler(session_data if session_data is not None else {})
         auth_manager = SpotifyOAuth(
             client_id=SPOTIPY_CLIENT_ID,
             client_secret=SPOTIPY_CLIENT_SECRET,
@@ -113,6 +120,30 @@ def create_spotify_client():
         logging.error(f"Error creating Spotify client: {e}")
         return None
 
+def create_spotify_client_with_session(session_data):
+    """
+    Create authenticated Spotify client with provided session data
+    """
+    try:
+        scope = "playlist-modify-public playlist-modify-private playlist-read-private"
+        
+        # Create cache handler with provided session data
+        cache_handler = SessionCacheHandler(session_data)
+        
+        auth_manager = SpotifyOAuth(
+            client_id=SPOTIPY_CLIENT_ID,
+            client_secret=SPOTIPY_CLIENT_SECRET,
+            redirect_uri=SPOTIPY_REDIRECT_URI,
+            scope=scope,
+            cache_handler=cache_handler,
+        )
+        
+        sp = spotipy.Spotify(auth_manager=auth_manager)
+        return sp
+    except Exception as e:
+        logging.error(f"Error creating Spotify client with session data: {e}")
+        return None
+
 def search_track(sp, artist, track):
     """
     Search for a track on Spotify
@@ -133,7 +164,7 @@ def search_track(sp, artist, track):
 # Dictionary to store task progress
 tasks = {}
 
-def create_playlist_from_csv(csv_content, playlist_name, task_id):
+def create_playlist_from_csv(csv_content, playlist_name, task_id, session_data=None):
     """
     Create a Spotify playlist from CSV content with progress tracking
     """
@@ -145,8 +176,12 @@ def create_playlist_from_csv(csv_content, playlist_name, task_id):
             'status': 'processing'
         }
 
-        # Create Spotify client
-        sp = create_spotify_client()
+        # Create Spotify client with session data if provided
+        if session_data:
+            sp = create_spotify_client_with_session(session_data)
+        else:
+            sp = create_spotify_client()
+            
         if not sp:
             tasks[task_id].update({'status': 'error', 'message': 'Failed to create Spotify client'})
             return False
@@ -274,6 +309,55 @@ def get_user_playlists():
         logging.error(f"Error getting user playlists: {e}")
         return None
 
+def get_user_playlists_with_session(session_data):
+    """
+    Get all playlists for the authenticated user using provided session data
+    """
+    try:
+        sp = create_spotify_client_with_session(session_data)
+        if not sp:
+            logging.error("Failed to create Spotify client for getting playlists")
+            return None
+            
+        # Get current user info
+        user = sp.current_user()
+        user_id = user['id']
+        
+        # Get all user playlists
+        playlists = []
+        results = sp.user_playlists(user_id)
+        
+        while results:
+            for item in results['items']:
+                playlist_info = {
+                    'id': item['id'],
+                    'name': item['name'],
+                    'description': item.get('description', ''),
+                    'public': item['public'],
+                    'collaborative': item['collaborative'],
+                    'tracks_total': item['tracks']['total'],
+                    'owner': item['owner']['display_name'],
+                    'owner_id': item['owner']['id'],
+                    'href': item['href'],
+                    'external_url': item['external_urls']['spotify'],
+                    'images': item['images'],
+                    'snapshot_id': item['snapshot_id']
+                }
+                playlists.append(playlist_info)
+            
+            # Check if there are more playlists to fetch
+            if results['next']:
+                results = sp.next(results)
+            else:
+                break
+                
+        logging.info(f"Retrieved {len(playlists)} playlists for user {user_id}")
+        return playlists
+        
+    except Exception as e:
+        logging.error(f"Error getting user playlists: {e}")
+        return None
+
 def get_playlist_tracks(playlist_id):
     """
     Get all tracks from a specific playlist
@@ -313,7 +397,46 @@ def get_playlist_tracks(playlist_id):
         logging.error(f"Error getting playlist tracks: {e}")
         return None
 
-def merge_playlists(source_playlist_id, target_playlist_id, task_id):
+def get_playlist_tracks_with_session(playlist_id, session_data):
+    """
+    Get all tracks from a specific playlist using provided session data
+    """
+    try:
+        sp = create_spotify_client_with_session(session_data)
+        if not sp:
+            logging.error("Failed to create Spotify client for getting playlist tracks")
+            return None
+            
+        tracks = []
+        results = sp.playlist_tracks(playlist_id)
+        
+        while results:
+            for item in results['items']:
+                track = item['track']
+                if track:  # Handle deleted tracks
+                    track_info = {
+                        'id': track['id'],
+                        'name': track['name'],
+                        'artist': track['artists'][0]['name'] if track['artists'] else '',
+                        'uri': track['uri'],
+                        'album': track['album']['name'] if track['album'] else ''
+                    }
+                    tracks.append(track_info)
+            
+            # Check if there are more tracks to fetch
+            if results['next']:
+                results = sp.next(results)
+            else:
+                break
+                
+        logging.info(f"Retrieved {len(tracks)} tracks from playlist {playlist_id}")
+        return tracks
+        
+    except Exception as e:
+        logging.error(f"Error getting playlist tracks: {e}")
+        return None
+
+def merge_playlists(source_playlist_id, target_playlist_id, task_id, session_data=None):
     """
     Merge tracks from source playlist to target playlist, then delete source playlist
     """
@@ -325,8 +448,8 @@ def merge_playlists(source_playlist_id, target_playlist_id, task_id):
             'status': 'processing'
         }
 
-        # Create Spotify client
-        sp = create_spotify_client()
+        # Create Spotify client with session data
+        sp = create_spotify_client_with_session(session_data)
         if not sp:
             tasks[task_id].update({'status': 'error', 'message': 'Failed to create Spotify client'})
             return False
@@ -334,7 +457,7 @@ def merge_playlists(source_playlist_id, target_playlist_id, task_id):
         tasks[task_id].update({'progress': 10, 'message': 'Getting source playlist tracks...'})
         
         # Get tracks from source playlist
-        source_tracks = get_playlist_tracks(source_playlist_id)
+        source_tracks = get_playlist_tracks_with_session(source_playlist_id, session_data)
         if not source_tracks:
             tasks[task_id].update({'status': 'error', 'message': 'Failed to get tracks from source playlist'})
             return False
@@ -343,7 +466,7 @@ def merge_playlists(source_playlist_id, target_playlist_id, task_id):
         
         # Get tracks from target playlist to check for duplicates
         tasks[task_id].update({'progress': 40, 'message': 'Getting target playlist tracks...'})
-        target_tracks = get_playlist_tracks(target_playlist_id)
+        target_tracks = get_playlist_tracks_with_session(target_playlist_id, session_data)
         if target_tracks is None:
             tasks[task_id].update({'status': 'error', 'message': 'Failed to get tracks from target playlist'})
             return False
@@ -414,13 +537,19 @@ def merge_playlists(source_playlist_id, target_playlist_id, task_id):
             })
         return False
 
-def clear_spotify_token():
+def clear_spotify_token(session_data=None):
     """
     Clear Spotify token from session
     """
     try:
-        if 'spotify_token_info' in session:
-            del session['spotify_token_info']
+        # Always use provided session_data, never access Flask session directly
+        # This prevents "Working outside of request context" errors in background threads
+        if session_data is None:
+            logging.warning("clear_spotify_token called without session_data, no action taken")
+            return False
+        
+        if 'spotify_token_info' in session_data:
+            del session_data['spotify_token_info']
             logging.info("Spotify token cleared from session")
             return True
         return False
@@ -428,12 +557,14 @@ def clear_spotify_token():
         logging.error(f"Error clearing Spotify token: {e}")
         return False
 
-def is_authenticated():
+def is_authenticated(session_data=None):
     """
     Check if user is authenticated with Spotify
     """
     try:
-        cache_handler = SessionCacheHandler()
+        # Always provide session_data to SessionCacheHandler, even if None
+        # This prevents "Working outside of request context" errors in background threads
+        cache_handler = SessionCacheHandler(session_data if session_data is not None else {})
         token_info = cache_handler.get_cached_token()
         
         if not token_info:
@@ -449,12 +580,14 @@ def is_authenticated():
         logging.error(f"Error checking authentication status: {e}")
         return False
 
-def refresh_token_if_needed():
+def refresh_token_if_needed(session_data=None):
     """
     Refresh Spotify token if needed
     """
     try:
-        cache_handler = SessionCacheHandler()
+        # Always provide session_data to SessionCacheHandler, even if None
+        # This prevents "Working outside of request context" errors in background threads
+        cache_handler = SessionCacheHandler(session_data if session_data is not None else {})
         token_info = cache_handler.get_cached_token()
         
         if not token_info:
@@ -463,7 +596,7 @@ def refresh_token_if_needed():
         # Check if token needs refresh (expires within 60 seconds)
         if cache_handler.is_token_expired(token_info):
             logging.info("Refreshing Spotify token...")
-            auth_manager = create_spotify_auth_manager()
+            auth_manager = create_spotify_auth_manager(session_data if session_data is not None else {})
             
             # Refresh the token
             refreshed_token = auth_manager.refresh_access_token(token_info['refresh_token'])

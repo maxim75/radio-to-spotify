@@ -10,3 +10,4 @@ boto3
 botocore
 spotipy
 python-dotenv
+pandas
