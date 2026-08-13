@@ -4,73 +4,57 @@ This application fetches radio station playlists and creates corresponding Spoti
 
 ## Prerequisites
 
-- Python 3.x
+- [uv](https://docs.astral.sh/uv/) (manages Python and all Python dependencies)
 - Node.js and npm
 - Docker (optional, for production deployment)
+
+Install uv if you don't have it:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
 
 ## Local Development Setup
 
 ### 1. Backend Setup
 
-#### Create and Activate Python Virtual Environment
-
-First, ensure you have Python 3.x installed. Then create and activate a virtual environment:
-
-```bash
-# Create virtual environment
-python -m venv env
-
-# Activate virtual environment
-# On macOS/Linux:
-source env/bin/activate
-# On Windows:
-# env\Scripts\activate
-
-# Verify activation (should show virtual environment's Python)
-which python  # On macOS/Linux
-# where python  # On Windows
-```
-
 #### Install Python Dependencies
 
-With the virtual environment activated, install the required packages:
+Python dependencies are declared in `pyproject.toml` and pinned in `uv.lock`. uv creates
+and manages the `.venv/` virtual environment for you — there is no `pip install` step and
+no need to activate anything manually:
 
 ```bash
-# Upgrade pip first (recommended)
-pip install --upgrade pip
-
-# Install project dependencies (use --no-cache-dir if encountering issues)
-pip install -r requirements.txt
-# If you encounter issues, try:
-# pip install -r requirements.txt --no-cache-dir
-
-# Verify installations and versions
-pip list | grep -E "flask|pandas|uwsgi|spotipy|boto3"
-
-# If you encounter SSL or certificate errors, you might need to:
-pip install --upgrade certifi
+uv sync
 ```
 
-##### Troubleshooting Installation Issues
+This installs the exact locked versions and downloads the Python version named in
+`.python-version` (3.13) if it isn't already available.
 
-If you encounter installation problems:
+Run any command inside that environment with `uv run`:
 
-1. Make sure you're in the virtual environment:
 ```bash
-# Should show path to your project's virtual env
-which python
+uv run python -c "import flask, pandas, spotipy; print('ok')"
+uv run flask --version
 ```
 
-2. Clear pip cache if needed:
+##### Managing Dependencies
+
 ```bash
-pip cache purge
-pip install -r requirements.txt --no-cache-dir
+uv add <package>            # add a dependency (updates pyproject.toml and uv.lock)
+uv remove <package>         # remove a dependency
+uv lock --upgrade           # re-resolve to the latest allowed versions
+uv sync --group prod        # also install uWSGI (needs a C toolchain; used in Docker)
 ```
 
-3. Install system dependencies if required (on Ubuntu/Debian):
+`uwsgi` lives in the optional `prod` dependency group because it has to be compiled from
+source and is only needed by the production entrypoint, so a plain `uv sync` skips it.
+
+If you need a `requirements.txt` for another tool, generate one from the lockfile rather
+than hand-maintaining it:
+
 ```bash
-sudo apt-get update
-sudo apt-get install python3-dev build-essential
+uv export --format requirements-txt --no-hashes -o requirements.txt
 ```
 
 #### Configure Environment Variables
@@ -94,6 +78,10 @@ AWS_ACCESS_KEY_ID=your_aws_key
 AWS_SECRET_ACCESS_KEY=your_aws_secret
 AWS_REGION=your_preferred_region  # e.g., us-east-1
 
+# HTTP Basic Auth (required - see "Authentication" below)
+BASIC_AUTH_USERNAME=your_username
+BASIC_AUTH_PASSWORD=your_password
+
 # Flask configuration
 FLASK_APP=app.py
 FLASK_ENV=development  # Use 'production' for production deployment
@@ -105,15 +93,12 @@ FLASK_DEBUG=1         # Enable debug mode for development
 After setup, verify your development environment:
 
 ```bash
-# Check Python version and virtual environment
-python --version
-pip --version
+# Check the Python version uv provisioned and list installed packages
+uv run python --version
+uv pip list
 
 # Verify Flask installation
-flask --version
-
-# Test environment variables
-flask config  # Custom command to check configuration
+uv run flask --version
 
 # Create required directories
 mkdir -p logs data  # Create directories for logs and data if they don't exist
@@ -138,7 +123,7 @@ npm run dev
 #### Start Backend Server
 ```bash
 # In the project root directory
-flask run --debug -h 0.0.0.0 -p 8001
+uv run flask run --debug -h 0.0.0.0 -p 8001
 ```
 
 The application will be available at:
@@ -163,8 +148,39 @@ npm run build
 
 2. Run the Flask application with a production server (e.g., uWSGI):
 ```bash
-uwsgi --ini uwsgi.ini
+uv sync --group prod
+uv run uwsgi --http 0.0.0.0:8001 --master -p 4 -w app:app
 ```
+
+## Authentication
+
+The whole application is behind HTTP Basic Auth. A `before_request` hook in `app.py`
+guards **every** route, including the static bundle and the Spotify OAuth callback, so
+there is nothing reachable without credentials.
+
+Configure it with two environment variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `BASIC_AUTH_USERNAME` | Username required to access the app |
+| `BASIC_AUTH_PASSWORD` | Password required to access the app |
+| `BASIC_AUTH_REALM` | Optional; the realm shown in the browser prompt (default `Radio to Spotify`) |
+| `BASIC_AUTH_DISABLED` | Optional; set to `true` to turn authentication off entirely |
+
+**It fails closed.** If `BASIC_AUTH_USERNAME` and `BASIC_AUTH_PASSWORD` are not both set,
+every request is rejected with `503` and an error is logged, rather than the app quietly
+running unprotected. To run locally without credentials, opt out explicitly:
+
+```bash
+BASIC_AUTH_DISABLED=true uv run flask run --debug -h 0.0.0.0 -p 8001
+```
+
+Credentials are compared with `hmac.compare_digest`, so a wrong username and a wrong
+password take the same amount of time to reject.
+
+> **Note:** Basic Auth sends the password base64-encoded, not encrypted. Serve the app
+> over HTTPS (or behind a TLS-terminating reverse proxy) in production, and set
+> `SESSION_COOKIE_SECURE=True` in `app.py` when you do.
 
 ## API Endpoints
 
@@ -185,6 +201,9 @@ uwsgi --ini uwsgi.ini
 ├── spotify_playlist.py    # Spotify integration logic
 ├── load_playlist.py      # Radio station playlist fetching
 ├── playlist_upload.py    # S3 upload/download functionality
+├── pyproject.toml        # Python dependencies (managed by uv)
+├── uv.lock              # Pinned dependency versions
+├── .python-version      # Python version uv provisions
 ├── static/              # Frontend directory
 │   ├── package.json     # Node dependencies
 │   ├── tsconfig.json    # TypeScript configuration
@@ -194,7 +213,6 @@ uwsgi --ini uwsgi.ini
 │       ├── types.ts     # TypeScript type definitions
 │       └── components/  # React components
 ├── templates/           # Flask templates
-├── requirements.txt     # Python dependencies
 ├── .env                # Environment variables (not in git)
 ├── .env.template       # Template for environment variables
 └── docker-compose.yml  # Docker composition for production
@@ -228,12 +246,8 @@ This will start the frontend development server with:
 # Ensure you're in the project root directory
 cd /path/to/radio-to-spotify
 
-# Activate virtual environment (if not already activated)
-source env/bin/activate  # On macOS/Linux
-# env\Scripts\activate  # On Windows
-
-# Start Flask development server
-flask run --debug -h 0.0.0.0 -p 8001
+# Start Flask development server (uv activates .venv for you)
+uv run flask run --debug -h 0.0.0.0 -p 8001
 ```
 
 This will start the Flask server with:

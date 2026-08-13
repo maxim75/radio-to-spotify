@@ -1,12 +1,13 @@
-from flask import Flask, request, redirect, session, url_for, render_template, flash
+from flask import Flask, Response, request, redirect, session, url_for, render_template, flash
 import logging
 import subprocess
 import os
+import hmac
 from apscheduler.schedulers.background import BackgroundScheduler
 import atexit
 import load_playlist
 import playlist_upload
-import pandas as pd 
+import pandas as pd
 import datetime
 import spotify_playlist
 from urllib.parse import urlencode
@@ -15,6 +16,16 @@ import uuid
 import threading
 
 AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID")
+
+# HTTP Basic Auth credentials. Read after `import spotify_playlist`, which is what
+# calls load_dotenv() and populates the environment from .env.
+BASIC_AUTH_USERNAME = os.environ.get("BASIC_AUTH_USERNAME")
+BASIC_AUTH_PASSWORD = os.environ.get("BASIC_AUTH_PASSWORD")
+BASIC_AUTH_REALM = os.environ.get("BASIC_AUTH_REALM", "Radio to Spotify")
+# Opt out entirely (local development only) with BASIC_AUTH_DISABLED=true.
+BASIC_AUTH_DISABLED = os.environ.get("BASIC_AUTH_DISABLED", "").strip().lower() in (
+    "1", "true", "yes", "on"
+)
 
 # Set up logging
 console_handler = logging.StreamHandler()
@@ -51,6 +62,57 @@ app.config.update(
     SESSION_COOKIE_SAMESITE='Lax',
     PERMANENT_SESSION_LIFETIME=datetime.timedelta(hours=1)  # Session expires after 1 hour
 )
+
+if BASIC_AUTH_DISABLED:
+    logging.warning("HTTP Basic Auth is DISABLED via BASIC_AUTH_DISABLED - do not use this in production")
+elif not (BASIC_AUTH_USERNAME and BASIC_AUTH_PASSWORD):
+    logging.error(
+        "BASIC_AUTH_USERNAME/BASIC_AUTH_PASSWORD are not set - all requests will be "
+        "rejected with 503. Set them in .env, or set BASIC_AUTH_DISABLED=true for local development."
+    )
+
+def check_basic_auth(auth):
+    """Constant-time comparison of supplied Basic Auth credentials against the configured ones"""
+    if not auth or auth.type != 'basic':
+        return False
+
+    # Compare both fields unconditionally (no short-circuit) so a wrong username and a
+    # wrong password take the same amount of time.
+    username_ok = hmac.compare_digest(
+        (auth.username or '').encode('utf-8'), BASIC_AUTH_USERNAME.encode('utf-8')
+    )
+    password_ok = hmac.compare_digest(
+        (auth.password or '').encode('utf-8'), BASIC_AUTH_PASSWORD.encode('utf-8')
+    )
+    return username_ok & password_ok
+
+@app.before_request
+def require_basic_auth():
+    """Require HTTP Basic Auth for every request, including static files and the OAuth callback"""
+    if BASIC_AUTH_DISABLED:
+        return None
+
+    # Fail closed: without configured credentials the app serves nothing rather than
+    # silently running unprotected.
+    if not (BASIC_AUTH_USERNAME and BASIC_AUTH_PASSWORD):
+        return Response(
+            'Server is not configured: BASIC_AUTH_USERNAME and BASIC_AUTH_PASSWORD must be set.',
+            503,
+            {'Content-Type': 'text/plain; charset=utf-8'}
+        )
+
+    if check_basic_auth(request.authorization):
+        return None
+
+    logging.warning(f"Rejected unauthenticated request to {request.path} from {request.remote_addr}")
+    return Response(
+        'Authentication required.',
+        401,
+        {
+            'WWW-Authenticate': f'Basic realm="{BASIC_AUTH_REALM}", charset="UTF-8"',
+            'Content-Type': 'text/plain; charset=utf-8'
+        }
+    )
 
 def my_scheduled_job():
     """Scheduled job to load playlists without Flask context"""
