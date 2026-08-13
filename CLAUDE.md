@@ -49,7 +49,7 @@ Pipeline: scrape → CSV on disk → S3 bucket `radio-playlists` → Spotify pla
 
 ### Hardcoded paths and IDs
 
-CSVs are written to `/var/data/...` in both `load_playlist.py` and `app.py`. That path only exists inside the container (`docker-compose.yml` mounts `./data:/var/data`), so `/load_playlist` fails on a bare macOS run unless `/var/data` is created. Station IDs and the `radio-playlists` bucket name are literals scattered across `app.py`, `load_playlist.py`, and `spotify_playlist.py`.
+CSVs are written to `/var/data/...` in both `load_playlist.py` and `app.py`. That path only exists inside the container (`docker-compose.yaml` mounts `./data:/var/data`), so `/load_playlist` fails on a bare macOS run unless `/var/data` is created. Station IDs and the `radio-playlists` bucket name are literals scattered across `app.py`, `load_playlist.py`, and `spotify_playlist.py`.
 
 ### HTTP Basic Auth
 

@@ -215,7 +215,7 @@ password take the same amount of time to reject.
 ├── templates/           # Flask templates
 ├── .env                # Environment variables (not in git)
 ├── .env.template       # Template for environment variables
-└── docker-compose.yml  # Docker composition for production
+└── docker-compose.yaml # Docker composition for production
 ```
 
 ## Development
