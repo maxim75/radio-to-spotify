@@ -213,11 +213,33 @@ def spotify_status():
         }, 500
 
 
-scheduler = BackgroundScheduler()
-scheduler.add_job(func=my_scheduled_job, trigger="cron", hour="23", minute="40") 
-scheduler.start()
+def should_start_scheduler():
+    """
+    Decide whether this process owns the daily cron job.
 
-atexit.register(lambda: scheduler.shutdown())
+    Under uWSGI the app is loaded with --lazy-apps, so every worker imports this module
+    and would otherwise start its own scheduler and run the job N times. Pin it to
+    worker 1. Outside uWSGI (flask run, python app.py) there is a single process.
+    """
+    try:
+        import uwsgi
+    except ImportError:
+        return True
+    return uwsgi.worker_id() == 1
+
+# NOTE: this must not run before uWSGI forks its workers. A BackgroundScheduler thread
+# started pre-fork leaves its locks (and the logging module's) held forever in the
+# children, which deadlocks every worker on its first request. --lazy-apps in the
+# Dockerfile is what guarantees this module is imported after the fork.
+scheduler = None
+if should_start_scheduler():
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(func=my_scheduled_job, trigger="cron", hour="23", minute="40")
+    scheduler.start()
+    atexit.register(lambda: scheduler.shutdown())
+    logging.info("Started background scheduler in this process")
+else:
+    logging.info("Skipping background scheduler in this worker")
 
 @app.route('/')
 def index():

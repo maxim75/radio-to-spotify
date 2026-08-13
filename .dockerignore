@@ -1,0 +1,16 @@
+.git
+.github
+.venv
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.cache*
+data/
+logs/
+cron_logs/
+static/node_modules/
+static/dist/
+CLAUDE.md
