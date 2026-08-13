@@ -1,0 +1,26 @@
+[project]
+name = "radio-to-spotify"
+version = "1.0.0"
+description = "Fetch radio station playlists and create matching Spotify playlists"
+requires-python = ">=3.13"
+dependencies = [
+    "APScheduler",
+    "beautifulsoup4",
+    "boto3",
+    "botocore",
+    "flask",
+    "latest-user-agents",
+    "pandas",
+    "python-crontab",
+    "python-dotenv",
+    "requests",
+    "spotipy",
+]
+
+[dependency-groups]
+# uWSGI is only used by the Docker/production entrypoint and needs a C toolchain
+# to build, so it is kept out of the default sync.
+prod = ["uwsgi"]
+
+[tool.uv]
+package = false
