@@ -146,17 +146,15 @@ def scrape_and_upload_playlists():
     failures = []
 
     try:
+        # load_playlist() raises NoTracksFoundError on an empty scrape and only writes a
+        # file when it has tracks, so there is nothing to re-read here. Reading it back
+        # was worse than redundant: a bare open() uses the platform default encoding,
+        # which is ASCII in the container, and the Cyrillic track names blew up on it.
         playlist_filename = load_playlist.load_playlist()
-        if os.path.getsize(playlist_filename) > 0 and sum(
-            1 for _ in open(playlist_filename)
-        ) > 1:
-            playlist_upload.upload_file_to_s3(
-                playlist_filename, "radio-playlists", playlist_filename.split("/")[-1]
-            )
-            uploaded.append(playlist_filename.split("/")[-1])
-        else:
-            failures.append(("retrofm", "scrape produced no tracks - not uploaded"))
-            logging.error("retrofm scrape produced no tracks - skipping upload")
+        playlist_upload.upload_file_to_s3(
+            playlist_filename, "radio-playlists", playlist_filename.split("/")[-1]
+        )
+        uploaded.append(playlist_filename.split("/")[-1])
     except Exception as e:
         failures.append(("retrofm", str(e)))
         logging.error(f"Error scraping retrofm: {e}")
