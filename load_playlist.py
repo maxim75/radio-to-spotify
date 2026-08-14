@@ -60,7 +60,7 @@ RADOXO_PLAYLIST_URL = "https://radoxo.com/playlist-for-day"
 # To repopulate, find each station on https://radoxo.com and run:
 #     uv run python -c "import load_playlist; \
 #         print(load_playlist.get_radoxo_station_id('https://radoxo.com/<country>/<slug>'))"
-RADOXO_STATION_IDS = []
+RADOXO_STATION_IDS = [38225, 16134, 38234, 38234]
 
 class NoTracksFoundError(Exception):
     """Raised when a scrape returns a page but no tracks, so breakage is never silent."""
