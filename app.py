@@ -91,6 +91,15 @@ def check_basic_auth(auth):
 # Keep the set minimal and keep those responses free of anything sensitive.
 PUBLIC_PATHS = frozenset({'/health'})
 
+# Returned when a route needs Spotify but the session holds no token. Without this the
+# request reached spotipy, which fell back to its interactive console flow and died with
+# "EOF when reading a line", surfacing as an opaque 500.
+SPOTIFY_AUTH_REQUIRED = {
+    'status': 'error',
+    'message': 'Not authenticated with Spotify. Connect your account and try again.',
+    'auth_url': '/spotify/auth',
+}
+
 @app.before_request
 def require_basic_auth():
     """Require HTTP Basic Auth for every request, including static files and the OAuth callback"""
@@ -178,8 +187,10 @@ def spotify_callback():
             return "No authorization code received", 400
 
         # Exchange the code for access token
-        success = spotify_playlist.handle_oauth_callback(code)
-        
+        # Pass the live session, not dict(session): the token is written through the
+        # cache handler into this mapping and must survive the response.
+        success = spotify_playlist.handle_oauth_callback(code, session)
+
         if success:
             return "Successfully authenticated with Spotify! You can close this window."
         else:
@@ -193,7 +204,7 @@ def spotify_callback():
 def spotify_logout():
     """Logout from Spotify and clear token"""
     try:
-        success = spotify_playlist.clear_spotify_token(dict(session))
+        success = spotify_playlist.clear_spotify_token(session)
         if success:
             flash("Successfully logged out from Spotify", 'success')
         else:
@@ -208,7 +219,7 @@ def spotify_logout():
 def spotify_status():
     """Check Spotify authentication status"""
     try:
-        is_auth = spotify_playlist.is_authenticated(dict(session))
+        is_auth = spotify_playlist.is_authenticated(session)
         return {
             'authenticated': is_auth,
             'message': 'Authenticated with Spotify' if is_auth else 'Not authenticated with Spotify'
@@ -336,6 +347,12 @@ def create_playlist_from_file():
         # Generate a task ID
         task_id = str(uuid.uuid4())
 
+        # Copy the session here, in the request context. Reading it inside the thread
+        # raises "Working outside of request context" once the response has been sent.
+        session_data = dict(session)
+        if not spotify_playlist.has_cached_token(session_data):
+            return SPOTIFY_AUTH_REQUIRED, 401
+
         # Download CSV content
         csv_content = playlist_upload.download_file_from_s3("radio-playlists", file_name)
         if not csv_content:
@@ -346,12 +363,10 @@ def create_playlist_from_file():
 
         # Create playlist name from file name (remove .csv extension)
         playlist_name = file_name.rsplit('.', 1)[0]
-        
+
         # Start playlist creation in background thread
         def run_playlist_creation():
             try:
-                # Copy session data to make it available in the background thread
-                session_data = dict(session)
                 spotify_playlist.create_playlist_from_csv(csv_content, playlist_name, task_id, session_data)
             except Exception as e:
                 logging.error(f"Error in background playlist creation: {e}")
@@ -400,7 +415,10 @@ def playlist_progress(task_id):
 def get_playlist_tracks(playlist_id):
     """Get all tracks from a specific playlist"""
     try:
-        tracks = spotify_playlist.get_playlist_tracks_with_session(playlist_id, dict(session))
+        if not spotify_playlist.has_cached_token(session):
+            return SPOTIFY_AUTH_REQUIRED, 401
+
+        tracks = spotify_playlist.get_playlist_tracks_with_session(playlist_id, session)
         
         if tracks is None:
             return {
@@ -435,11 +453,15 @@ def merge_playlists():
         # Generate a task ID
         task_id = str(uuid.uuid4())
 
+        # Copy the session here, in the request context. Reading it inside the thread
+        # raises "Working outside of request context" once the response has been sent.
+        session_data = dict(session)
+        if not spotify_playlist.has_cached_token(session_data):
+            return SPOTIFY_AUTH_REQUIRED, 401
+
         # Start playlist merging in background thread
         def run_merge_process():
             try:
-                # Copy session data to make it available in the background thread
-                session_data = dict(session)
                 spotify_playlist.merge_playlists(source_playlist_id, target_playlist_id, task_id, session_data)
             except Exception as e:
                 logging.error(f"Error in background playlist merging: {e}")
@@ -472,7 +494,11 @@ def merge_playlists():
 def create_playlists():
     """Create Spotify playlists from S3 CSV files"""
     try:
-        spotify_playlist.process_s3_playlists()
+        if not spotify_playlist.has_cached_token(session):
+            flash("Connect your Spotify account first", 'error')
+            return redirect(url_for('list_playlists'))
+
+        spotify_playlist.process_s3_playlists(dict(session))
         flash("Playlists creation process started", 'success')
         return redirect(url_for('list_playlists'))
     except Exception as e:
@@ -484,7 +510,10 @@ def create_playlists():
 def get_spotify_playlists():
     """Get all user playlists from Spotify account as JSON response"""
     try:
-        playlists = spotify_playlist.get_user_playlists_with_session(dict(session))
+        if not spotify_playlist.has_cached_token(session):
+            return SPOTIFY_AUTH_REQUIRED, 401
+
+        playlists = spotify_playlist.get_user_playlists_with_session(session)
         
         if playlists is None:
             return {

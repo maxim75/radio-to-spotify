@@ -5,6 +5,7 @@ import os
 import logging
 import pandas as pd
 import time
+import uuid
 from io import StringIO
 from playlist_upload import download_file_from_s3, list_objects_in_bucket
 
@@ -48,6 +49,16 @@ class SessionCacheHandler(CacheHandler):
         now = int(time.time())
         return token_info['expires_at'] - now < 60
 
+def has_cached_token(session_data):
+    """
+    Whether this session already holds a Spotify token.
+
+    An expired token still counts: spotipy refreshes it non-interactively using the
+    refresh token. What must be avoided is building a client with no token at all,
+    because spotipy then falls back to its interactive console flow.
+    """
+    return bool((session_data or {}).get('spotify_token_info'))
+
 def create_spotify_auth_manager(session_data=None):
     """
     Create and return a configured SpotifyOAuth auth manager with session-based cache
@@ -62,6 +73,9 @@ def create_spotify_auth_manager(session_data=None):
             redirect_uri=SPOTIPY_REDIRECT_URI,
             scope=scope,
             cache_handler=cache_handler,
+            # Never try to open a browser or prompt on stdin: there is no console in a
+            # uWSGI worker, and the prompt dies with "EOF when reading a line".
+            open_browser=False,
             #username=SPOTIFY_USERNAME
         )
         return auth_manager
@@ -79,67 +93,57 @@ def get_auth_url():
         return None
     return auth_manager.get_authorize_url()
 
-def handle_oauth_callback(code):
+def handle_oauth_callback(code, session_data):
     """
-    Handle the OAuth callback and get access token
+    Handle the OAuth callback and get access token.
+
+    `session_data` must be the live Flask session, not a dict(session) copy: the token
+    is written through the cache handler into that mapping, and a copy is discarded
+    when the request ends, leaving the user permanently unauthenticated.
     """
     try:
-        auth_manager = create_spotify_auth_manager()
+        auth_manager = create_spotify_auth_manager(session_data)
         if not auth_manager:
             logging.error("Failed to create auth manager for OAuth callback")
             return False
-        
+
         # Get the access token
-        token_info = auth_manager.get_access_token(code)
+        token_info = auth_manager.get_access_token(code, check_cache=False)
         if not token_info:
             logging.error("Failed to get access token")
             return False
-            
+
         # Save the token info for future use
         auth_manager.cache_handler.save_token_to_cache(token_info)
-        logging.info("Successfully saved Spotify access token")
+        logging.info("Successfully saved Spotify access token to the session")
         return True
-        
+
     except Exception as e:
         logging.error(f"Error handling OAuth callback: {e}")
         return False
 
-def create_spotify_client():
-    """
-    Create authenticated Spotify client
-    """
-    try:
-        auth_manager = create_spotify_auth_manager()
-        if not auth_manager:
-            logging.error("Failed to create auth manager for Spotify client")
-            return None
-            
-        sp = spotipy.Spotify(auth_manager=auth_manager)
-        return sp
-    except Exception as e:
-        logging.error(f"Error creating Spotify client: {e}")
-        return None
-
 def create_spotify_client_with_session(session_data):
     """
-    Create authenticated Spotify client with provided session data
+    Create an authenticated Spotify client from the token held in `session_data`.
+
+    Returns None when that session holds no token. Building a client anyway would let
+    spotipy fall back to its interactive console flow, which in a uWSGI worker prints
+    "Enter the URL you were redirected to:" and then raises EOFError.
+
+    Pass the live Flask session for request-scoped work so a refreshed token is written
+    back to the cookie; background threads have no request context and must pass a
+    dict(session) copy, where a refresh cannot be persisted.
     """
+    if not has_cached_token(session_data):
+        logging.info("No Spotify token in session - not creating a client")
+        return None
+
     try:
-        scope = "playlist-modify-public playlist-modify-private playlist-read-private"
-        
-        # Create cache handler with provided session data
-        cache_handler = SessionCacheHandler(session_data)
-        
-        auth_manager = SpotifyOAuth(
-            client_id=SPOTIPY_CLIENT_ID,
-            client_secret=SPOTIPY_CLIENT_SECRET,
-            redirect_uri=SPOTIPY_REDIRECT_URI,
-            scope=scope,
-            cache_handler=cache_handler,
-        )
-        
-        sp = spotipy.Spotify(auth_manager=auth_manager)
-        return sp
+        auth_manager = create_spotify_auth_manager(session_data)
+        if not auth_manager:
+            return None
+
+        return spotipy.Spotify(auth_manager=auth_manager)
     except Exception as e:
         logging.error(f"Error creating Spotify client with session data: {e}")
         return None
@@ -164,7 +168,7 @@ def search_track(sp, artist, track):
 # Dictionary to store task progress
 tasks = {}
 
-def create_playlist_from_csv(csv_content, playlist_name, task_id, session_data=None):
+def create_playlist_from_csv(csv_content, playlist_name, task_id, session_data):
     """
     Create a Spotify playlist from CSV content with progress tracking
     """
@@ -176,14 +180,12 @@ def create_playlist_from_csv(csv_content, playlist_name, task_id, session_data=N
             'status': 'processing'
         }
 
-        # Create Spotify client with session data if provided
-        if session_data:
-            sp = create_spotify_client_with_session(session_data)
-        else:
-            sp = create_spotify_client()
-            
+        sp = create_spotify_client_with_session(session_data)
         if not sp:
-            tasks[task_id].update({'status': 'error', 'message': 'Failed to create Spotify client'})
+            tasks[task_id].update({
+                'status': 'error',
+                'message': 'Not authenticated with Spotify. Connect your account and try again.'
+            })
             return False
 
         # Get current user's ID
@@ -260,55 +262,6 @@ def create_playlist_from_csv(csv_content, playlist_name, task_id, session_data=N
             })
         return False
 
-def get_user_playlists():
-    """
-    Get all playlists for the authenticated user
-    """
-    try:
-        sp = create_spotify_client()
-        if not sp:
-            logging.error("Failed to create Spotify client for getting playlists")
-            return None
-            
-        # Get current user info
-        user = sp.current_user()
-        user_id = user['id']
-        
-        # Get all user playlists
-        playlists = []
-        results = sp.user_playlists(user_id)
-        
-        while results:
-            for item in results['items']:
-                playlist_info = {
-                    'id': item['id'],
-                    'name': item['name'],
-                    'description': item.get('description', ''),
-                    'public': item['public'],
-                    'collaborative': item['collaborative'],
-                    'tracks_total': item['tracks']['total'],
-                    'owner': item['owner']['display_name'],
-                    'owner_id': item['owner']['id'],
-                    'href': item['href'],
-                    'external_url': item['external_urls']['spotify'],
-                    'images': item['images'],
-                    'snapshot_id': item['snapshot_id']
-                }
-                playlists.append(playlist_info)
-            
-            # Check if there are more playlists to fetch
-            if results['next']:
-                results = sp.next(results)
-            else:
-                break
-                
-        logging.info(f"Retrieved {len(playlists)} playlists for user {user_id}")
-        return playlists
-        
-    except Exception as e:
-        logging.error(f"Error getting user playlists: {e}")
-        return None
-
 def get_user_playlists_with_session(session_data):
     """
     Get all playlists for the authenticated user using provided session data
@@ -356,45 +309,6 @@ def get_user_playlists_with_session(session_data):
         
     except Exception as e:
         logging.error(f"Error getting user playlists: {e}")
-        return None
-
-def get_playlist_tracks(playlist_id):
-    """
-    Get all tracks from a specific playlist
-    """
-    try:
-        sp = create_spotify_client()
-        if not sp:
-            logging.error("Failed to create Spotify client for getting playlist tracks")
-            return None
-            
-        tracks = []
-        results = sp.playlist_tracks(playlist_id)
-        
-        while results:
-            for item in results['items']:
-                track = item['track']
-                if track:  # Handle deleted tracks
-                    track_info = {
-                        'id': track['id'],
-                        'name': track['name'],
-                        'artist': track['artists'][0]['name'] if track['artists'] else '',
-                        'uri': track['uri'],
-                        'album': track['album']['name'] if track['album'] else ''
-                    }
-                    tracks.append(track_info)
-            
-            # Check if there are more tracks to fetch
-            if results['next']:
-                results = sp.next(results)
-            else:
-                break
-                
-        logging.info(f"Retrieved {len(tracks)} tracks from playlist {playlist_id}")
-        return tracks
-        
-    except Exception as e:
-        logging.error(f"Error getting playlist tracks: {e}")
         return None
 
 def get_playlist_tracks_with_session(playlist_id, session_data):
@@ -611,7 +525,7 @@ def refresh_token_if_needed(session_data=None):
         logging.error(f"Error refreshing token: {e}")
         return None
 
-def process_s3_playlists(bucket_name="radio-playlists"):
+def process_s3_playlists(session_data, bucket_name="radio-playlists"):
     """
     Process all CSV files in the S3 bucket and create Spotify playlists
     """
@@ -621,7 +535,7 @@ def process_s3_playlists(bucket_name="radio-playlists"):
         if not objects:
             logging.warning(f"No objects found in bucket {bucket_name}")
             return
-        
+
         for obj_name in objects[:2]:
             if obj_name.endswith('.csv'):
                 # Download CSV content
@@ -629,7 +543,9 @@ def process_s3_playlists(bucket_name="radio-playlists"):
                 if csv_content:
                     # Use filename without extension as playlist name
                     playlist_name = obj_name.rsplit('.', 1)[0]
-                    create_playlist_from_csv(csv_content, playlist_name)
-                    
+                    create_playlist_from_csv(
+                        csv_content, playlist_name, str(uuid.uuid4()), session_data
+                    )
+
     except Exception as e:
         logging.error(f"Error processing S3 playlists: {e}")

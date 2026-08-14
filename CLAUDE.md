@@ -61,11 +61,18 @@ Adding a route means it is protected automatically. Anything that must be public
 
 Long operations (create-from-CSV, merge) return a `task_id` immediately and run in a daemon `threading.Thread`; the frontend polls `/playlist_progress/<task_id>`. Progress lives in the module-level `spotify_playlist.tasks` dict — **in-memory, per-process, never evicted**. Under the Docker `uwsgi -p 4` config a poll can land on a worker that has no record of the task, and the APScheduler cron job (`23:40`, registered at import in `app.py`) is registered once per worker.
 
-### Spotify auth (the fragile part)
+### Spotify auth
 
-`SessionCacheHandler` (a spotipy `CacheHandler`) stores `spotify_token_info` in the Flask session cookie instead of the `.cache*` files. Flow: `/spotify/auth` → Spotify → `/callback` → `handle_oauth_callback(code)`.
+`SessionCacheHandler` (a spotipy `CacheHandler`) stores `spotify_token_info` in the Flask session cookie instead of the `.cache*` files. Flow: `/spotify/auth` → Spotify → `/callback` → `handle_oauth_callback(code, session)`.
 
-Every function that touches Spotify comes in two flavors — `get_user_playlists()` vs `get_user_playlists_with_session(session_data)` — because background threads have no request context. Routes pass `dict(session)`, a **copy**: tokens refreshed inside a thread are written to that copy and lost, and `get_auth_url`/`handle_oauth_callback` build an auth manager with an empty `{}` cache so the callback's token never reaches the user's session. This is the known-broken state the current `spotify-copilot` branch is working on (HEAD: "use session for spotify lib. Not working"). Prefer the `_with_session` variants when adding code; the non-session ones authenticate against an empty cache and will fail.
+Two rules govern what you pass as the session, and getting either wrong is silent:
+
+- **Request-scoped code passes the live `session`**, never `dict(session)`. The cache handler writes the token *into* that mapping, so a copy is discarded when the response is sent — that was the bug that left `/callback` unable to authenticate anyone and made every Spotify route 500.
+- **Background threads must pass a `dict(session)` copy**, captured *in the request context* before `thread.start()`. Reading `session` inside the thread raises "Working outside of request context". A token refreshed inside a thread is written to that copy and lost; the user re-authenticates.
+
+Never build a client without checking `has_cached_token(session_data)` first. `create_spotify_client_with_session` returns `None` when there is no token precisely because spotipy would otherwise fall back to its interactive console flow, print `Enter the URL you were redirected to:` and raise `EOFError` in a uWSGI worker. Every auth manager sets `open_browser=False` for the same reason. Routes return `SPOTIFY_AUTH_REQUIRED` with 401 rather than letting that happen.
+
+The non-session variants (`create_spotify_client`, `get_user_playlists`, `get_playlist_tracks`) were removed — they authenticated against an empty cache and could only ever fail.
 
 ### Two Vite configs
 
