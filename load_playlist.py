@@ -15,6 +15,9 @@ aws_api_key = os.environ.get("AWS_API_KEY")
 # container (docker-compose mounts ./data there); override for local runs and tests.
 DATA_DIR = os.environ.get("PLAYLIST_DATA_DIR", "/var/data")
 
+# The columns every scraper must return; create_playlist_from_csv depends on these names.
+PLAYLIST_COLUMNS = ["time", "artist_name", "song_name"]
+
 def get_user_agent():
     chrome_user_agents = get_latest_user_agents()
     user_agent = chrome_user_agents[0]
@@ -26,9 +29,10 @@ def get_playlist_from_radiotut(station_id, day):
     tracks = []
 
     url = f"https://radiotut.com/radio/{station_id}/playlist/{day if day != 1 else ""}/"
-    print(url)
+    logging.info(f"Fetching radiotut playlist: {url}")
 
-    response = requests.get(url, headers={"user-agent": get_user_agent()})
+    response = requests.get(url, headers={"user-agent": get_user_agent()}, timeout=30)
+    response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")
 
     track_history_items = soup.select(".b_playlist li")
@@ -39,11 +43,7 @@ def get_playlist_from_radiotut(station_id, day):
         current_date = (current_datetime - datetime.timedelta(days=day-1)).strftime("%Y-%m-%d")
         tracks.append({"time" : f"{current_date}T{time}:00", "artist_name": artist_name, "song_name": song_name})
         
-    tracks_df = pd.DataFrame(tracks)
-    return tracks_df
-
-# The columns every scraper must return; create_playlist_from_csv depends on these names.
-PLAYLIST_COLUMNS = ["time", "artist_name", "song_name"]
+    return pd.DataFrame(tracks, columns=PLAYLIST_COLUMNS)
 
 # raddio.net rebranded to Radoxo. The old
 # /radio_stations/playlist/playlist?id=..&day=.. endpoint now 301s to the bare homepage,
@@ -128,13 +128,26 @@ def get_radoxo_station_id(station_page_url):
     return int(day_link["data-station-id"])
 
 def load_playlist():
+    """
+    Scrape retrofm and write it to DATA_DIR, returning the filename.
+
+    Raises NoTracksFoundError on an empty scrape, matching get_playlist_from_radoxo, so
+    no file is written and callers never upload an empty playlist.
+    """
     station_id = "retrofm"
-    print(f"load_playlist {datetime.datetime.now()}")
+    logging.info(f"load_playlist {datetime.datetime.now()}")
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    playlist_df = get_playlist_from_radiotut(station_id, 2);
+    playlist_df = get_playlist_from_radiotut(station_id, 2)
+    if playlist_df.empty:
+        raise NoTracksFoundError(
+            f"radiotut station {station_id} returned no tracks - the page layout may have changed"
+        )
+
     filename = os.path.join(DATA_DIR, f"playlist_{station_id}_{timestamp}.csv")
-    playlist_df.to_csv(filename, index=False)
+    # Track names are Cyrillic; never rely on the platform default encoding.
+    playlist_df.to_csv(filename, index=False, encoding="utf-8")
+    logging.info(f"retrofm: wrote {len(playlist_df)} tracks to {filename}")
     return filename
 
 

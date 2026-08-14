@@ -22,7 +22,10 @@ WORKDIR /app
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
-    UV_PYTHON_DOWNLOADS=never
+    UV_PYTHON_DOWNLOADS=never \
+    # The image sets no locale, so Python would default to ASCII and choke on the
+    # Cyrillic track names the moment anything opens a file without an explicit encoding.
+    PYTHONUTF8=1
 
 # Install dependencies first so this layer is cached independently of source changes
 COPY pyproject.toml uv.lock .python-version ./
