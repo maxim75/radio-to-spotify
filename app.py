@@ -166,7 +166,7 @@ def scrape_and_upload_playlists():
 
     for station_id in load_playlist.RADOXO_STATION_IDS:
         try:
-            playlist_df = load_playlist.get_playlist_from_raddio(station_id, yesterday_date)
+            playlist_df = load_playlist.get_playlist_from_radoxo(station_id, yesterday_date)
 
             # Guard the upload itself as well, so a future scraper change that returns an
             # empty frame instead of raising still cannot write a junk file to S3.

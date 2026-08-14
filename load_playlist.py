@@ -65,7 +65,7 @@ RADOXO_STATION_IDS = []
 class NoTracksFoundError(Exception):
     """Raised when a scrape returns a page but no tracks, so breakage is never silent."""
 
-def get_playlist_from_raddio(station_id, date):
+def get_playlist_from_radoxo(station_id, date):
     """
     Fetch one day of playlist history for a Radoxo station.
 
