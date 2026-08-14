@@ -540,13 +540,29 @@ def view_playlist(file_name):
     try:
         # Download CSV content
         csv_content = playlist_upload.download_file_from_s3("radio-playlists", file_name)
-        if not csv_content:
+        if csv_content is None:
             flash(f'Failed to download file: {file_name}', 'error')
             return redirect(url_for('list_playlists'))
 
+        # A scrape that found no tracks writes a file holding nothing but a newline, and
+        # pd.read_csv raises EmptyDataError on it. Show the page with an empty state
+        # rather than bouncing the user back to the list with no explanation.
+        if not csv_content.strip():
+            return render_template('view_playlist.html',
+                                   file_name=file_name,
+                                   data=[],
+                                   columns=[])
+
         # Parse CSV content into a DataFrame
-        df = pd.read_csv(StringIO(csv_content))
-        
+        try:
+            df = pd.read_csv(StringIO(csv_content))
+        except pd.errors.EmptyDataError:
+            logging.warning(f"Playlist {file_name} contains no parseable CSV data")
+            return render_template('view_playlist.html',
+                                   file_name=file_name,
+                                   data=[],
+                                   columns=[])
+
         # Convert DataFrame to list of dictionaries for template
         data = df.to_dict('records')
         columns = df.columns.tolist()
