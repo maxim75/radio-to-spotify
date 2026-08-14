@@ -36,6 +36,24 @@
             background-color: #f5f5f5;
             font-weight: bold;
         }
+        .find-cell {
+            width: 1%;
+            white-space: nowrap;
+        }
+        .spotify-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background-color: #1DB954;
+            color: white;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 13px;
+            text-decoration: none;
+        }
+        .spotify-link:hover {
+            background-color: #1ed760;
+        }
         .empty-state {
             margin-top: 20px;
             padding: 20px;
@@ -88,12 +106,14 @@
         <p>No tracks were captured when it was scraped, so the file contains no rows.</p>
     </div>
     {% else %}
+    {% set can_search = 'artist_name' in columns and 'song_name' in columns %}
     <table>
         <thead>
             <tr>
                 {% for column in columns %}
                 <th>{{ column }}</th>
                 {% endfor %}
+                {% if can_search %}<th>Find</th>{% endif %}
             </tr>
         </thead>
         <tbody>
@@ -102,6 +122,21 @@
                 {% for column in columns %}
                 <td>{{ row[column] }}</td>
                 {% endfor %}
+                {% if can_search %}
+                <td class="find-cell">
+                    <a class="spotify-link"
+                       href="https://open.spotify.com/search/{{ (row['artist_name']|string ~ ' ' ~ row['song_name']|string)|urlencode }}"
+                       target="_blank"
+                       rel="noopener noreferrer"
+                       title="Find &quot;{{ row['song_name'] }}&quot; by {{ row['artist_name'] }} on Spotify">
+                        <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false">
+                            <circle cx="12" cy="12" r="12" fill="currentColor"/>
+                            <path fill="#fff" d="M17.6 10.8a11.6 11.6 0 0 0-9.9-1 .85.85 0 1 1-.5-1.63 13.3 13.3 0 0 1 11.3 1.15.85.85 0 0 1-.9 1.45zm-1.3 3.1a.71.71 0 0 1-.98.24 9.6 9.6 0 0 0-7.6-.9.71.71 0 1 1-.4-1.36 11 11 0 0 1 8.74 1.04c.33.2.44.64.24.98zm-1.4 2.9a.57.57 0 0 1-.78.19 7.5 7.5 0 0 0-5.7-.7.57.57 0 1 1-.3-1.1 8.6 8.6 0 0 1 6.6.83c.27.16.35.51.19.78z"/>
+                        </svg>
+                        Spotify
+                    </a>
+                </td>
+                {% endif %}
             </tr>
             {% endfor %}
         </tbody>
