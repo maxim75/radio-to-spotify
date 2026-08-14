@@ -86,9 +86,17 @@ def check_basic_auth(auth):
     )
     return username_ok & password_ok
 
+# Paths reachable without credentials. The container orchestrator (Coolify/Docker)
+# probes the health endpoint without any way to send Basic Auth, so it is exempt.
+# Keep the set minimal and keep those responses free of anything sensitive.
+PUBLIC_PATHS = frozenset({'/health'})
+
 @app.before_request
 def require_basic_auth():
     """Require HTTP Basic Auth for every request, including static files and the OAuth callback"""
+    if request.path in PUBLIC_PATHS:
+        return None
+
     if BASIC_AUTH_DISABLED:
         return None
 
@@ -277,6 +285,17 @@ def load_playlist_route():
 
 
     return "Playlist loaded"
+
+@app.route('/health')
+def health():
+    """
+    Liveness probe for Coolify/Docker.
+
+    Deliberately unauthenticated (see PUBLIC_PATHS) and deliberately dumb: it reports
+    that this uWSGI worker can accept and answer a request, nothing more. It does not
+    touch S3 or Spotify, so an outage in either does not get the container restarted.
+    """
+    return {'status': 'ok'}, 200
 
 @app.route('/config')
 def config():
