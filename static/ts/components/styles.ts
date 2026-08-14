@@ -12,6 +12,33 @@ export const PlaylistList = styled.ul`
   padding: 0;
 `;
 
+export const FilterRow = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 15px;
+`;
+
+export const FilterInput = styled.input`
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 20px;
+  font-size: 14px;
+  font-family: inherit;
+
+  &:focus {
+    outline: none;
+    border-color: #1DB954;
+  }
+`;
+
+export const FilterCount = styled.span`
+  font-size: 14px;
+  color: #666;
+  white-space: nowrap;
+`;
+
 export const PlaylistItem = styled.li`
   display: flex;
   justify-content: space-between;

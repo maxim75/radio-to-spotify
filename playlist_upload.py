@@ -17,10 +17,14 @@ def list_objects_in_bucket(bucket_name):
             region_name=AWS_REGION,
         )
         
-        response = s3_client.list_objects_v2(Bucket=bucket_name)
-        if 'Contents' in response:
-            return [obj['Key'] for obj in response['Contents']]
-        return []
+        # list_objects_v2 returns at most 1000 keys per response and signals the rest
+        # with a continuation token, so page through them instead of returning only
+        # the first page.
+        keys = []
+        paginator = s3_client.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=bucket_name):
+            keys.extend(obj['Key'] for obj in page.get('Contents', []))
+        return keys
     except Exception as e:
         logging.error(f"Error listing objects in bucket {bucket_name}: {e}")
         return []

@@ -1,11 +1,18 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { PlaylistFile } from '../types';
 import { PlaylistItem } from './PlaylistItem';
-import { PlaylistContainer, PlaylistList } from './styles';
+import {
+  PlaylistContainer,
+  PlaylistList,
+  FilterRow,
+  FilterInput,
+  FilterCount,
+} from './styles';
 
 export const PlaylistsPage: React.FC = () => {
   const [files, setFiles] = useState<PlaylistFile[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [filter, setFilter] = useState<string>('');
 
   useEffect(() => {
     fetchPlaylists();
@@ -28,11 +35,33 @@ export const PlaylistsPage: React.FC = () => {
     }
   };
 
+  const query = filter.trim().toLowerCase();
+  const visibleFiles = useMemo(
+    () => (query ? files.filter((file) => file.name.toLowerCase().includes(query)) : files),
+    [files, query]
+  );
+
   return (
     <PlaylistContainer>
       <h1>Radio Playlists</h1>
+      <FilterRow>
+        <FilterInput
+          type="search"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="Filter by name..."
+          aria-label="Filter playlists by name"
+        />
+        {!isLoading && (
+          <FilterCount>
+            {query
+              ? `${visibleFiles.length} of ${files.length}`
+              : `${files.length} playlist${files.length === 1 ? '' : 's'}`}
+          </FilterCount>
+        )}
+      </FilterRow>
       <PlaylistList>
-        {files.map((file) => (
+        {visibleFiles.map((file) => (
           <PlaylistItem key={file.name} file={file} />
         ))}
         {isLoading && (
@@ -40,6 +69,9 @@ export const PlaylistsPage: React.FC = () => {
         )}
         {!isLoading && files.length === 0 && (
           <li>No playlist files found.</li>
+        )}
+        {!isLoading && files.length > 0 && visibleFiles.length === 0 && (
+          <li>No playlists match "{filter.trim()}".</li>
         )}
       </PlaylistList>
     </PlaylistContainer>
