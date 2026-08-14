@@ -131,32 +131,72 @@ def require_basic_auth():
         }
     )
 
+def scrape_and_upload_playlists():
+    """
+    Scrape every configured source and upload the results to S3.
+
+    A playlist is only uploaded when it actually contains tracks: an empty scrape is a
+    bug in the scraper or a retired station, and writing it produced the 877 one-byte
+    CSVs that accumulated after raddio.net became Radoxo. One failing station does not
+    abort the others.
+
+    Returns (uploaded, failures) where failures is a list of (source, reason).
+    """
+    uploaded = []
+    failures = []
+
+    try:
+        playlist_filename = load_playlist.load_playlist()
+        if os.path.getsize(playlist_filename) > 0 and sum(
+            1 for _ in open(playlist_filename)
+        ) > 1:
+            playlist_upload.upload_file_to_s3(
+                playlist_filename, "radio-playlists", playlist_filename.split("/")[-1]
+            )
+            uploaded.append(playlist_filename.split("/")[-1])
+        else:
+            failures.append(("retrofm", "scrape produced no tracks - not uploaded"))
+            logging.error("retrofm scrape produced no tracks - skipping upload")
+    except Exception as e:
+        failures.append(("retrofm", str(e)))
+        logging.error(f"Error scraping retrofm: {e}")
+
+    current_datetime = datetime.datetime.now()
+    yesterday_date = (current_datetime - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+
+    for station_id in load_playlist.RADOXO_STATION_IDS:
+        try:
+            playlist_df = load_playlist.get_playlist_from_raddio(station_id, yesterday_date)
+
+            # Guard the upload itself as well, so a future scraper change that returns an
+            # empty frame instead of raising still cannot write a junk file to S3.
+            if playlist_df.empty:
+                failures.append((str(station_id), "scrape produced no tracks - not uploaded"))
+                logging.error(f"Station {station_id} produced no tracks - skipping upload")
+                continue
+
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = os.path.join(load_playlist.DATA_DIR, f"playlist_{station_id}_{timestamp}.csv")
+            playlist_df.to_csv(filename, index=False)
+            playlist_upload.upload_file_to_s3(
+                filename, "radio-playlists", filename.split("/")[-1]
+            )
+            uploaded.append(filename.split("/")[-1])
+        except Exception as e:
+            failures.append((str(station_id), str(e)))
+            logging.error(f"Error scraping station {station_id}: {e}")
+
+    return uploaded, failures
+
 def my_scheduled_job():
     """Scheduled job to load playlists without Flask context"""
     try:
-        # Load playlist data (same logic as load_playlist_route but without Flask response)
-        playlist_filename = load_playlist.load_playlist()
-        playlist_upload.upload_file_to_s3(
-            playlist_filename,
-            "radio-playlists",
-            playlist_filename.split("/")[-1]
-        )
-
-        for station_id in [75885, 309175, 294683]:
-            current_datetime = datetime.datetime.now()
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            current_date = current_datetime.strftime("%Y-%m-%d")
-            yesterday_date = (current_datetime - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-            playlist_df = load_playlist.get_playlist_from_raddio(station_id, yesterday_date)
-            filename = f"/var/data/playlist_{station_id}_{timestamp}.csv"
-            playlist_df.to_csv(filename, index=False)
-            playlist_upload.upload_file_to_s3(
-                filename,
-                "radio-playlists",
-                filename.split("/")[-1]
+        uploaded, failures = scrape_and_upload_playlists()
+        if failures:
+            logging.error(
+                f"Scheduled playlist loading finished with {len(failures)} failure(s): {failures}"
             )
-        
-        logging.info("Scheduled playlist loading completed successfully")
+        logging.info(f"Scheduled playlist loading uploaded {len(uploaded)} playlist(s)")
     except Exception as e:
         logging.error(f"Error in scheduled playlist loading: {e}")
 
@@ -272,30 +312,13 @@ def spotify_page():
 
 @app.route('/load_playlist')
 def load_playlist_route():
-    playlist_filename = load_playlist.load_playlist()
-    playlist_upload.upload_file_to_s3(
-        playlist_filename,
-        "radio-playlists",
-        playlist_filename.split("/")[-1]
-    )
+    uploaded, failures = scrape_and_upload_playlists()
 
-
-    for station_id in [75885, 309175, 294683]:
-        current_datetime = datetime.datetime.now()
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        current_date = current_datetime.strftime("%Y-%m-%d")
-        yesterday_date = (current_datetime - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
-        playlist_df = load_playlist.get_playlist_from_raddio(station_id, yesterday_date)
-        filename = f"/var/data/playlist_{station_id}_{timestamp}.csv"
-        playlist_df.to_csv(filename, index=False)
-        playlist_upload.upload_file_to_s3(
-            filename,
-            "radio-playlists",
-            filename.split("/")[-1]
-        )
-
-
-    return "Playlist loaded"
+    return {
+        'status': 'error' if failures and not uploaded else 'success',
+        'uploaded': uploaded,
+        'failures': [{'source': s, 'reason': r} for s, r in failures],
+    }, (500 if failures and not uploaded else 200)
 
 @app.route('/health')
 def health():

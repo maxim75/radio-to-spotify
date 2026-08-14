@@ -41,7 +41,9 @@ Credentials come from `.env` (copy `.env.template`): `SPOTIPY_CLIENT_ID/SECRET/R
 
 Pipeline: scrape → CSV on disk → S3 bucket `radio-playlists` → Spotify playlist.
 
-- **[load_playlist.py](load_playlist.py)** — BeautifulSoup scrapers for two sources with different HTML shapes: `get_playlist_from_radiotut(station_id, day)` (day is an offset, station id is a slug like `retrofm`, Moscow time) and `get_playlist_from_raddio(station_id, date)` (numeric ids `75885, 309175, 294683`, UTC). Both return a DataFrame with `time`, `artist_name`, `song_name` — those exact column names are the contract consumed by `create_playlist_from_csv`. Rotates User-Agent via `latest-user-agents`.
+- **[load_playlist.py](load_playlist.py)** — scrapers for two sources with different shapes. `get_playlist_from_radiotut(station_id, day)` parses HTML (day is an offset, station id is a slug like `retrofm`, Moscow time). `get_playlist_from_raddio(station_id, date)` hits Radoxo's `playlist-for-day` JSON endpoint, whose `main` key holds an HTML fragment of `li.playlist-track` rows (`.playlist-track__status[data-ts]` is a UTC epoch, `__song` and `__artist` are the text). Both return a DataFrame with `time`, `artist_name`, `song_name` — those exact column names, `PLAYLIST_COLUMNS`, are the contract consumed by `create_playlist_from_csv`. Rotates User-Agent via `latest-user-agents`.
+
+  raddio.net became **Radoxo** and its ids did not carry over, so `RADOXO_STATION_IDS` is empty; repopulate it with `get_radoxo_station_id('https://radoxo.com/<country>/<slug>')`. Radoxo only retains about 7 days of history. The scraper raises `NoTracksFoundError` instead of returning an empty frame, and `raise_for_status()` turns a retired id into a 404 — both deliberate, because silently returning nothing is exactly what filled the bucket with 877 one-byte CSVs.
 - **[playlist_upload.py](playlist_upload.py)** — thin boto3 S3 wrapper. Every function swallows exceptions and returns `[]`/`None`, so callers must null-check rather than expect raises.
 - **[spotify_playlist.py](spotify_playlist.py)** — all Spotify logic. Track matching is a single `sp.search(q=f"{track} artist:{artist}", limit=1)` per row; unmatched tracks are silently dropped. Writes to Spotify batch at 100 URIs (API limit).
 - **[app.py](app.py)** — routes, scheduler, background threads.
@@ -49,7 +51,9 @@ Pipeline: scrape → CSV on disk → S3 bucket `radio-playlists` → Spotify pla
 
 ### Hardcoded paths and IDs
 
-CSVs are written to `/var/data/...` in both `load_playlist.py` and `app.py`. That path only exists inside the container (`docker-compose.yaml` mounts `./data:/var/data`), so `/load_playlist` fails on a bare macOS run unless `/var/data` is created. Station IDs and the `radio-playlists` bucket name are literals scattered across `app.py`, `load_playlist.py`, and `spotify_playlist.py`.
+CSVs are written to `load_playlist.DATA_DIR`, which defaults to `/var/data` and is overridable with `PLAYLIST_DATA_DIR`. That default only exists inside the container (`docker-compose.yaml` mounts `./data:/var/data`), so set the env var for a bare macOS run. Station ids now live in one place (`load_playlist.RADOXO_STATION_IDS`), but the `radio-playlists` bucket name is still a literal scattered across `app.py`, `load_playlist.py`, and `spotify_playlist.py`.
+
+`scrape_and_upload_playlists()` in `app.py` is the single scrape path shared by `/load_playlist` and the cron job. It **only uploads a playlist that contains tracks**, and one failing source never aborts the others — it returns `(uploaded, failures)` so both callers can report per-station outcomes.
 
 ### HTTP Basic Auth
 
