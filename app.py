@@ -53,7 +53,15 @@ logging.basicConfig(
 logging.info('app.py script started')
 
 app = Flask(__name__, static_url_path='/static', static_folder='static/dist')
-app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'dev-secret-key')  # Set a secret key for session management
+# `or` rather than a get() default: docker compose substitutes an unset variable as an
+# empty string, and an empty secret key makes Flask refuse to open or save any session.
+app.secret_key = os.environ.get('FLASK_SECRET_KEY') or 'dev-secret-key'
+if not os.environ.get('FLASK_SECRET_KEY'):
+    logging.warning(
+        "FLASK_SECRET_KEY is not set - falling back to a default key that is public in "
+        "this repository. Anyone can forge a session cookie, including the Spotify token "
+        "it carries. Set FLASK_SECRET_KEY to a random value in production."
+    )
 
 # Configure session settings for security
 app.config.update(
@@ -203,6 +211,16 @@ def spotify_auth():
     """Initiate Spotify OAuth flow"""
     try:
         auth_url = spotify_playlist.get_auth_url()
+        # get_auth_url returns None when the SPOTIPY_* credentials are unset. Passing that
+        # to redirect() raised inside the except below and surfaced as a generic 500,
+        # which reads as "Spotify is down" rather than "this deployment has no client id".
+        if not auth_url:
+            return (
+                "Spotify is not configured on this server: the SPOTIPY_CLIENT_ID, "
+                "SPOTIPY_CLIENT_SECRET and SPOTIPY_REDIRECT_URI environment variables "
+                "must be set for the OAuth flow to start.",
+                500
+            )
         return redirect(auth_url)
     except Exception as e:
         logging.error(f"Error initiating Spotify auth: {e}")

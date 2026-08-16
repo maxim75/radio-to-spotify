@@ -10,8 +10,21 @@ services:
 
     environment:
       - TZ=Etc/UTC
-      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID} 
-      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY} 
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_REGION=${AWS_REGION}
       - BASIC_AUTH_USERNAME=${BASIC_AUTH_USERNAME}
       - BASIC_AUTH_PASSWORD=${BASIC_AUTH_PASSWORD}
+      # .env is in .dockerignore, so load_dotenv() finds nothing inside the container
+      # and every variable the app needs has to be listed here. Without these three the
+      # OAuth flow cannot even start: spotipy raises "No client_id", /spotify/auth 500s,
+      # and every Spotify route answers 401 because no token ever reaches the session.
+      # SPOTIPY_REDIRECT_URI must be the public callback URL and must also be listed in
+      # the Spotify app dashboard, not the localhost value used for development.
+      - SPOTIPY_CLIENT_ID=${SPOTIPY_CLIENT_ID}
+      - SPOTIPY_CLIENT_SECRET=${SPOTIPY_CLIENT_SECRET}
+      - SPOTIPY_REDIRECT_URI=${SPOTIPY_REDIRECT_URI}
+      - SPOTIFY_USERNAME=${SPOTIFY_USERNAME}
+      # Falls back to a hardcoded 'dev-secret-key' that is public in this repo; anyone
+      # could then forge a session cookie, including the Spotify token it carries.
+      - FLASK_SECRET_KEY=${FLASK_SECRET_KEY}

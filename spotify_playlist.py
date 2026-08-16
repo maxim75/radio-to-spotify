@@ -20,6 +20,25 @@ SPOTIPY_CLIENT_SECRET = os.environ.get('SPOTIPY_CLIENT_SECRET')
 SPOTIPY_REDIRECT_URI = os.environ.get('SPOTIPY_REDIRECT_URI')
 SPOTIFY_USERNAME = os.environ.get('SPOTIFY_USERNAME')
 
+# Say so at startup rather than at first use. Missing credentials surface far from their
+# cause: spotipy raises "No client_id" inside create_spotify_auth_manager, that returns
+# None, /spotify/auth 500s on redirect(None), and every other Spotify route reports the
+# user is "not authenticated" - which looks like an expired session, not a missing config.
+_MISSING_SPOTIFY_VARS = [
+    name for name, value in (
+        ('SPOTIPY_CLIENT_ID', SPOTIPY_CLIENT_ID),
+        ('SPOTIPY_CLIENT_SECRET', SPOTIPY_CLIENT_SECRET),
+        ('SPOTIPY_REDIRECT_URI', SPOTIPY_REDIRECT_URI),
+    ) if not value
+]
+if _MISSING_SPOTIFY_VARS:
+    logging.error(
+        "Spotify is not configured: %s unset. Authentication cannot complete and every "
+        "Spotify route will report 'not authenticated'. In Docker these must be listed "
+        "in docker-compose.yaml - .env is in .dockerignore and never reaches the container.",
+        ', '.join(_MISSING_SPOTIFY_VARS)
+    )
+
 class SessionCacheHandler(CacheHandler):
     """
     Custom cache handler that stores Spotify tokens in Flask session or dictionary
