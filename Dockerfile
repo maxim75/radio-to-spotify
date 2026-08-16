@@ -62,7 +62,15 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 #   request made after authenticating, because the session cookie carries the Spotify
 #   token. Both buffers are set: --buffer-size covers the workers, --http-buffer-size
 #   the HTTP router that --http spawns, and the router rejects the request first.
+# -p 1 --threads 8: one process, concurrency from threads instead of workers.
+#   Progress for the create/merge endpoints lives in the module-level
+#   spotify_playlist.tasks dict, which is per-process. With 4 workers the POST that
+#   registers a task and the /playlist_progress poll that reads it landed on different
+#   workers, so a poll intermittently 404d - and the frontend treats one 404 as a
+#   terminal error, because the body is {"status": "error"}. Threads share the dict.
+#   This also stops the APScheduler cron being registered once per worker, which had
+#   been running the 23:40 scrape four times over.
 # CMD ["python", "app.py"]
 CMD ["uwsgi", "--http", "0.0.0.0:8001", "--master", "--lazy-apps", "--enable-threads", \
      "--buffer-size", "32768", "--http-buffer-size", "32768", \
-     "-p",  "4",  "-w", "app:app"]
+     "-p",  "1", "--threads", "8", "-w", "app:app"]
