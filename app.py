@@ -60,7 +60,12 @@ app.config.update(
     SESSION_COOKIE_SECURE=False,  # Set to True in production with HTTPS
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
-    PERMANENT_SESSION_LIFETIME=datetime.timedelta(hours=1)  # Session expires after 1 hour
+    # The session cookie is the only place the Spotify token lives, so this is really
+    # "how long you stay connected to Spotify". It is a sliding idle timeout: the
+    # cache handler marks the session permanent, and Flask re-stamps the cookie on
+    # every request. At one hour an idle tab silently lost its token and every Spotify
+    # route started answering 401, even though the refresh token was still valid.
+    PERMANENT_SESSION_LIFETIME=datetime.timedelta(days=30)
 )
 
 if BASIC_AUTH_DISABLED:
