@@ -223,3 +223,22 @@ export const PlaylistActions = styled.div`
   align-items: center;
   gap: 10px;
 `;
+
+// Shown wherever a route reports the session has no Spotify token. The routes return
+// the URL to use as `auth_url` alongside their 401, so the link is never hardcoded.
+// Opens in a new tab: /callback renders a plain "you can close this window" page, so
+// navigating the app away from itself would strand the user on that dead end.
+export const ConnectSpotifyLink = styled.a`
+  background-color: #1DB954;
+  color: white;
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 14px;
+  font-weight: bold;
+  text-decoration: none;
+  display: inline-block;
+
+  &:hover {
+    background-color: #1ed760;
+  }
+`;

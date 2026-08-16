@@ -7,6 +7,7 @@ import {
   ButtonGroup,
   ViewButton,
   AddButton,
+  ConnectSpotifyLink,
 } from './styles';
 
 interface PlaylistItemProps {
@@ -15,6 +16,9 @@ interface PlaylistItemProps {
 
 export const PlaylistItem: React.FC<PlaylistItemProps> = ({ file }) => {
   const [isProcessing, setIsProcessing] = useState(false);
+  // Set from the `auth_url` the server returns with its "not authenticated" response,
+  // so the button that failed is also where the user can fix it.
+  const [authUrl, setAuthUrl] = useState<string | null>(null);
   const [progress, setProgress] = useState<PlaylistProgress>({
     status: 'processing',
     progress: 0,
@@ -23,6 +27,7 @@ export const PlaylistItem: React.FC<PlaylistItemProps> = ({ file }) => {
 
   const handleAddToSpotify = async () => {
     setIsProcessing(true);
+    setAuthUrl(null);
     try {
       const response = await fetch('/create_playlist_from_file', {
         method: 'POST',
@@ -44,6 +49,7 @@ export const PlaylistItem: React.FC<PlaylistItemProps> = ({ file }) => {
           progress: 0,
           message: data.message
         });
+        setAuthUrl(data.auth_url || null);
         setIsProcessing(false);
       }
     } catch (error) {
@@ -95,7 +101,15 @@ export const PlaylistItem: React.FC<PlaylistItemProps> = ({ file }) => {
         >
           Add to Spotify
         </AddButton>
-        <ProgressBar active={isProcessing} progress={progress} />
+        {/* Also render while stopped-with-an-error: the error handlers clear
+            isProcessing, which used to hide the message they had just set, so a
+            failed click looked like nothing had happened at all. */}
+        <ProgressBar active={isProcessing || progress.status === 'error'} progress={progress} />
+        {authUrl && (
+          <ConnectSpotifyLink href={authUrl} target="_blank" rel="noopener noreferrer">
+            Connect Spotify
+          </ConnectSpotifyLink>
+        )}
       </ButtonGroup>
     </StyledPlaylistItem>
   );
