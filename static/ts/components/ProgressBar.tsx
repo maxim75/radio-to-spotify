@@ -17,7 +17,8 @@ interface ProgressBarProps {
 export const ProgressBar: React.FC<ProgressBarProps> = ({ active, progress }) => (
   <Progress active={active}>
     <ProgressStatus>
-      <ProgressSpinner />
+      {/* A spinner next to a failure message reads as "still working" */}
+      {progress.status !== 'error' && <ProgressSpinner />}
       <span>{progress.message}</span>
     </ProgressStatus>
     <ProgressBarContainer>

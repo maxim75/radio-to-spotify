@@ -1,12 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import { SpotifyPlaylist, MergeProgress } from '../types';
-import { PlaylistContainer, PlaylistList, PlaylistActions, MergeButton, DropdownContainer, DropdownMenu, DropdownItem } from './styles';
+import { PlaylistContainer, PlaylistList, PlaylistActions, MergeButton, DropdownContainer, DropdownMenu, DropdownItem, ConnectSpotifyLink } from './styles';
 import { ProgressBar } from './ProgressBar';
 
 export const SpotifyPlaylistsPage: React.FC = () => {
   const [playlists, setPlaylists] = useState<SpotifyPlaylist[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  // Set from the `auth_url` the server sends with its "not authenticated" response.
+  // Reading it from the response rather than hardcoding /spotify/auth keeps the two
+  // in step, and means the link only ever appears when Spotify is what is missing.
+  const [authUrl, setAuthUrl] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [itemsPerPage, setItemsPerPage] = useState<number>(20);
   const [mergeProgress, setMergeProgress] = useState<{ [playlistId: string]: MergeProgress }>({});
@@ -21,6 +25,7 @@ export const SpotifyPlaylistsPage: React.FC = () => {
     try {
       setIsLoading(true);
       setError(null);
+      setAuthUrl(null);
       const response = await fetch('/spotify_playlists');
       const data = await response.json();
 
@@ -28,6 +33,7 @@ export const SpotifyPlaylistsPage: React.FC = () => {
         setPlaylists(data.playlists);
       } else {
         setError(data.message || 'Failed to fetch Spotify playlists');
+        setAuthUrl(data.auth_url || null);
         console.error('Error from server:', data.message);
       }
     } catch (error) {
@@ -225,6 +231,16 @@ export const SpotifyPlaylistsPage: React.FC = () => {
           color: '#c00'
         }}>
           <strong>Error:</strong> {error}
+          {authUrl && (
+            <ConnectSpotifyLink
+              href={authUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ marginLeft: '10px' }}
+            >
+              Connect Spotify
+            </ConnectSpotifyLink>
+          )}
           <button
             onClick={fetchSpotifyPlaylists}
             style={{
