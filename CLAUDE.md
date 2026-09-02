@@ -81,8 +81,14 @@ That store is in-process, so **uWSGI must keep running a single process** (`-p 1
 to (`{"16134": "Radio FM"}`); `STATION_PLAYLISTS_CONFIG` overrides the path. **Station
 ids are opaque strings** - Radoxo ids look numeric but the radiotut source uses the
 slug `retrofm`, and both write into the same bucket. The file is re-read on every
-call, so editing it needs no restart. A broken config yields an empty mapping and a
-400 from the endpoint, never an import-time crash.
+call, so editing it needs no restart of the process - and in the container
+`docker-compose.yaml` bind-mounts it read-only over the image's copy
+(`./station_playlists.json:/app/station_playlists.json:ro`), so an edit on the host
+takes effect without a rebuild there either. `Dockerfile` also bakes a copy in with
+`COPY station_playlists.json ./` (the earlier `COPY *.py ./` does not match the
+`.json` glob), so the mount is a convenience, not the only way the file gets there.
+A broken config yields an empty mapping and a 400 from the endpoint, never an
+import-time crash.
 
 `POST /create-playlist-batch` (`{station_id, start_date, end_date}`, YYYY-MM-DD, both
 ends inclusive) selects stored CSVs **by the load date in the filename**, not by the

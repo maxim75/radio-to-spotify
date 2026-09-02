@@ -3,7 +3,10 @@ services:
     build: .
     volumes:
       - ./cron_logs:/var/log # Mount a volume to persist logs on the host
-      - ./data:/var/data 
+      - ./data:/var/data
+      # Read-only so an operator can edit station names on the host without a
+      # rebuild - the image bakes in a copy, but this mount shadows it.
+      - ./station_playlists.json:/app/station_playlists.json:ro
 
     ports:
       - '8001:8001'
