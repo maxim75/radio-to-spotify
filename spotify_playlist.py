@@ -9,6 +9,7 @@ import time
 import uuid
 from io import StringIO
 from playlist_upload import download_file_from_s3, list_objects_in_bucket
+import spotify_token_store
 
 # Load environment variables if .env file exists
 if os.path.exists('.env'):
@@ -136,6 +137,15 @@ def handle_oauth_callback(code, session_data):
         # Save the token info for future use
         auth_manager.cache_handler.save_token_to_cache(token_info)
         logging.info("Successfully saved Spotify access token to the session")
+
+        # Also persist it server-side so the nightly job can reach Spotify with no
+        # browser session. A failure here is logged and ignored: being unable to arm
+        # the unattended job must not stop this user from logging in.
+        if not spotify_token_store.save_token(token_info):
+            logging.error(
+                "Logged in, but the Spotify token could not be stored - the nightly "
+                "batch will skip Spotify until this is fixed"
+            )
         return True
 
     except Exception as e:
@@ -167,6 +177,30 @@ def create_spotify_client_with_session(session_data):
     except Exception as e:
         logging.error(f"Error creating Spotify client with session data: {e}")
         return None
+
+def create_spotify_client_from_store():
+    """
+    Build a Spotify client from the token persisted on disk, for unattended jobs.
+
+    Returns None when nothing is stored - the scheduler thread has no console, so a
+    client built without a token would print "Enter the URL you were redirected to:"
+    and raise EOFError.
+
+    The client is built over a WriteThroughTokenStore rather than a plain dict, so a
+    token spotipy refreshes during the run is persisted instead of being discarded.
+    """
+    token_info = spotify_token_store.load_token()
+    if not token_info:
+        logging.warning(
+            "No stored Spotify token - unattended jobs cannot reach Spotify. Connect "
+            "a Spotify account once to arm them."
+        )
+        return None
+
+    session_data = spotify_token_store.WriteThroughTokenStore(
+        {'spotify_token_info': token_info}
+    )
+    return create_spotify_client_with_session(session_data)
 
 def search_track(sp, artist, track):
     """
@@ -563,6 +597,10 @@ def clear_spotify_token(session_data=None):
             logging.warning("clear_spotify_token called without session_data, no action taken")
             return False
         
+        # Clear the server-side store too. An explicit logout that leaves the
+        # unattended credential armed is the wrong surprise.
+        spotify_token_store.clear_token()
+
         if 'spotify_token_info' in session_data:
             del session_data['spotify_token_info']
             logging.info("Spotify token cleared from session")
