@@ -190,3 +190,18 @@ def test_a_stations_backlog_is_capped_per_run(nightly, monkeypatch):
     nightly["processed"] = set(outcome["processed"])
     outcome_two = playlist_batch.process_new_playlists()
     assert sorted(outcome_two["processed"]) == all_keys[playlist_batch.MAX_KEYS_PER_STATION_PER_RUN:]
+
+
+def test_an_empty_bucket_listing_is_a_reported_failure_not_a_clean_run(nightly, monkeypatch):
+    # list_objects_in_bucket returns [] both on an S3 error and on a genuinely empty
+    # bucket. The marker code in this module already treats None from
+    # load_processed_keys as "could not read", not "nothing processed yet" - an empty
+    # listing deserves the same suspicion rather than being logged as a clean
+    # "0 file(s) processed, 0 failure(s)" run.
+    monkeypatch.setattr(playlist_batch, "list_objects_in_bucket", lambda bucket: [])
+
+    outcome = playlist_batch.process_new_playlists()
+
+    assert outcome["processed"] == []
+    assert nightly["upserts"] == []
+    assert ("s3", "bucket listing returned nothing - S3 may be unreachable") in outcome["failures"]

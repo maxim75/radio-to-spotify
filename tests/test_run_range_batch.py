@@ -128,3 +128,20 @@ def test_the_endpoint_never_writes_the_processed_marker(batch, monkeypatch):
                         lambda keys, bucket=None: pytest.fail("marker must not be written"))
 
     playlist_batch.run_range_batch("16134", START, END, "t1", {})
+
+
+def test_an_empty_bucket_listing_does_not_claim_the_range_is_empty(batch, monkeypatch):
+    # list_objects_in_bucket returns [] both when S3 is unreachable and when the
+    # bucket genuinely has nothing - the task must still complete (an empty range is
+    # a legitimate answer) but must not word its message as if it had positively
+    # confirmed the range is empty.
+    monkeypatch.setattr(playlist_batch, "list_objects_in_bucket", lambda bucket: [])
+
+    assert playlist_batch.run_range_batch("16134", START, END, "t1", {}) is True
+
+    assert batch["upsert_calls"] == []
+    task = spotify_playlist.get_task("t1")
+    assert task["status"] == "completed"
+    assert task["result"]["files"] == 0
+    assert "listing" in task["message"].lower()
+    assert "no playlist files" not in task["message"].lower()

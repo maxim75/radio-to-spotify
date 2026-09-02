@@ -225,7 +225,8 @@ def run_range_batch(station_id, start_date, end_date, task_id, session_data, buc
             )
             return False
 
-        keys = select_keys(list_objects_in_bucket(bucket), station_id, start_date, end_date)
+        listing = list_objects_in_bucket(bucket)
+        keys = select_keys(listing, station_id, start_date, end_date)
         empty_result = {
             'playlist_name': playlist_name,
             'added': 0,
@@ -235,10 +236,22 @@ def run_range_batch(station_id, start_date, end_date, task_id, session_data, buc
         }
 
         if not keys:
+            # list_objects_in_bucket returns [] both when S3 is unreachable and when
+            # the bucket genuinely has nothing. An empty range is a legitimate answer
+            # for a caller, so the task still completes - but when the listing itself
+            # was empty, the message must not assert as fact that the range is empty.
+            if not listing:
+                message = (
+                    f"The bucket listing came back empty (S3 may be unreachable) - "
+                    f"could not check for station {station_id} files between "
+                    f"{start_date} and {end_date}"
+                )
+            else:
+                message = (f"No playlist files for station {station_id} between "
+                           f"{start_date} and {end_date}")
             spotify_playlist.update_task(
                 task_id, status='completed', progress=100,
-                message=(f"No playlist files for station {station_id} between "
-                         f"{start_date} and {end_date}"),
+                message=message,
                 result=empty_result
             )
             return True
@@ -327,8 +340,23 @@ def process_new_playlists(bucket=BUCKET_NAME):
                 }
             processed = set()
 
+        listing = list_objects_in_bucket(bucket)
+        newly_processed = []
+        failures = []
+
+        if not listing:
+            # list_objects_in_bucket returns [] both when S3 is unreachable and when
+            # the bucket genuinely has nothing - and the bucket always holds at least
+            # the marker itself once bootstrapped, so an empty listing here is always
+            # suspicious. Report it rather than logging a misleadingly clean
+            # "0 file(s) processed, 0 failure(s)".
+            logging.error(
+                "Bucket listing for %s returned nothing - S3 may be unreachable", bucket
+            )
+            failures.append(('s3', 'bucket listing returned nothing - S3 may be unreachable'))
+
         pending = {}
-        for key in list_objects_in_bucket(bucket):
+        for key in listing:
             if key in processed:
                 continue
             parsed = parse_playlist_key(key)
@@ -338,9 +366,6 @@ def process_new_playlists(bucket=BUCKET_NAME):
             if station_id not in stations:
                 continue
             pending.setdefault(station_id, []).append(key)
-
-        newly_processed = []
-        failures = []
 
         for station_id, station_keys in sorted(pending.items()):
             station_keys = sorted(station_keys)
