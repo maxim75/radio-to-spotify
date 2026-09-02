@@ -2,10 +2,21 @@ export interface PlaylistFile {
   name: string;
 }
 
+export interface BatchResult {
+  playlist_id?: string;
+  playlist_name: string;
+  added: number;
+  skipped_existing: number;
+  unmatched: Array<{ artist: string; song: string }>;
+  files: number;
+}
+
 export interface PlaylistProgress {
   status: 'processing' | 'completed' | 'error';
   progress: number;
   message: string;
+  // Only batch runs report one; the create/merge jobs leave it null.
+  result?: BatchResult | null;
 }
 
 export interface SpotifyPlaylist {

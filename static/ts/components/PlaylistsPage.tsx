@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { PlaylistFile } from '../types';
 import { PlaylistItem } from './PlaylistItem';
+import { BatchPlaylistForm } from './BatchPlaylistForm';
 import {
   PlaylistContainer,
   PlaylistList,
@@ -44,6 +45,7 @@ export const PlaylistsPage: React.FC = () => {
   return (
     <PlaylistContainer>
       <h1>Radio Playlists</h1>
+      <BatchPlaylistForm />
       <FilterRow>
         <FilterInput
           type="search"
