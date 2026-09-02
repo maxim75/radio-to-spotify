@@ -27,7 +27,6 @@ services:
       - SPOTIPY_CLIENT_ID=${SPOTIPY_CLIENT_ID}
       - SPOTIPY_CLIENT_SECRET=${SPOTIPY_CLIENT_SECRET}
       - SPOTIPY_REDIRECT_URI=${SPOTIPY_REDIRECT_URI}
-      - SPOTIFY_USERNAME=${SPOTIFY_USERNAME}
       # Falls back to a hardcoded 'dev-secret-key' that is public in this repo; anyone
       # could then forge a session cookie, including the Spotify token it carries.
       - FLASK_SECRET_KEY=${FLASK_SECRET_KEY}

@@ -71,7 +71,6 @@ cp .env.template .env
 SPOTIPY_CLIENT_ID=your_client_id
 SPOTIPY_CLIENT_SECRET=your_client_secret
 SPOTIPY_REDIRECT_URI=http://localhost:8001/callback  # Default callback URL
-SPOTIFY_USERNAME=your_spotify_username
 
 # AWS credentials (from AWS IAM)
 AWS_ACCESS_KEY_ID=your_aws_key
