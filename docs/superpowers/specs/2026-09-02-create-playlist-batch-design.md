@@ -153,7 +153,9 @@ one-byte files from the pre-`NoTracksFoundError` era.
 { "processed": ["playlist_16134_20260814_072254.csv"], "updated_at": "2026-09-02T23:40:00" }
 ```
 
-Read once at the start of a nightly run, written once at the end. A key is recorded
+Read once at the start of a nightly run, written once at the end. **The endpoint never
+touches it**: a manual range batch is already idempotent through dedupe, and letting it
+write the marker would silently exclude those files from a later nightly run. A key is recorded
 **only when the upsert that consumed it succeeded**, so a Spotify outage leaves those
 files to be retried the next night instead of silently swallowing them. The read and
 write are guarded by a module-level lock; uWSGI runs a single process, so that lock is
@@ -173,8 +175,10 @@ sufficient.
 Given a client, a playlist name and unique `(artist, song)` pairs:
 
 1. Resolve or create the playlist by name.
-2. Read the playlist's existing track URIs into a set (`get_playlist_tracks_with_session`
-   already pages through them).
+2. Read the playlist's existing track URIs into a set. The paging loop currently lives
+   inside `get_playlist_tracks_with_session`, which takes `session_data` and builds its
+   own client; it is extracted into a client-based `get_playlist_tracks(sp, playlist_id)`
+   that both callers use, so the upsert never rebuilds a client it was already handed.
 3. One `sp.search` per unique pair, reusing `search_track`.
 4. Keep only URIs not already in the playlist, deduped against each other.
 5. Add in batches of 100 (the Spotify API limit).
