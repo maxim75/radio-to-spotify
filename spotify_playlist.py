@@ -19,7 +19,6 @@ if os.path.exists('.env'):
 SPOTIPY_CLIENT_ID = os.environ.get('SPOTIPY_CLIENT_ID')
 SPOTIPY_CLIENT_SECRET = os.environ.get('SPOTIPY_CLIENT_SECRET')
 SPOTIPY_REDIRECT_URI = os.environ.get('SPOTIPY_REDIRECT_URI')
-SPOTIFY_USERNAME = os.environ.get('SPOTIFY_USERNAME')
 
 # Say so at startup rather than at first use. Missing credentials surface far from their
 # cause: spotipy raises "No client_id" inside create_spotify_auth_manager, that returns
@@ -96,7 +95,6 @@ def create_spotify_auth_manager(session_data=None):
             # Never try to open a browser or prompt on stdin: there is no console in a
             # uWSGI worker, and the prompt dies with "EOF when reading a line".
             open_browser=False,
-            #username=SPOTIFY_USERNAME
         )
         return auth_manager
     except Exception as e:
