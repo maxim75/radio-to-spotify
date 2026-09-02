@@ -240,3 +240,94 @@ def run_range_batch(station_id, start_date, end_date, task_id, session_data, buc
             task_id, status='error', message=f'Error running batch: {str(e)}'
         )
         return False
+
+
+def process_new_playlists(bucket=BUCKET_NAME):
+    """
+    Push every not-yet-processed CSV for a configured station into its playlist.
+
+    Runs unattended from the nightly scheduler, so it authenticates from the stored
+    token rather than a session and never raises: a failure here must not stop the
+    scrape's own result from being logged.
+
+    A key is recorded as processed only once the upsert that consumed it succeeded,
+    so a Spotify outage leaves those files for tomorrow instead of swallowing them.
+
+    Returns {"processed": [keys], "failures": [(source, reason)]}, shaped like
+    scrape_and_upload_playlists so both halves of the nightly job read the same way.
+    """
+    stations = station_playlists.get_configured_stations()
+    if not stations:
+        logging.warning("No stations configured - nothing to push to Spotify")
+        return {'processed': [], 'failures': []}
+
+    sp = spotify_playlist.create_spotify_client_from_store()
+    if not sp:
+        logging.warning(
+            "Skipping the nightly Spotify push: no stored token. Connect a Spotify "
+            "account once to arm it."
+        )
+        return {'processed': [], 'failures': [('spotify', 'no stored Spotify token')]}
+
+    with _marker_lock:
+        processed = load_processed_keys(bucket)
+        if processed is None:
+            # Either the marker has never existed or S3 would not serve it. Write an
+            # empty one: if that succeeds the marker simply did not exist yet, and if
+            # it fails S3 is broken and running anyway would reprocess the whole
+            # bucket tonight and every night after.
+            logging.warning("No usable processed marker in %s - bootstrapping one", bucket)
+            if not save_processed_keys(set(), bucket):
+                logging.error(
+                    "Could not read or write the processed marker in %s - skipping the "
+                    "nightly push rather than reprocessing the whole bucket", bucket
+                )
+                return {
+                    'processed': [],
+                    'failures': [('marker', 'could not read or write the processed marker')],
+                }
+            processed = set()
+
+        pending = {}
+        for key in list_objects_in_bucket(bucket):
+            if key in processed:
+                continue
+            parsed = parse_playlist_key(key)
+            if not parsed:
+                continue
+            station_id, _ = parsed
+            if station_id not in stations:
+                continue
+            pending.setdefault(station_id, []).append(key)
+
+        newly_processed = []
+        failures = []
+
+        for station_id, station_keys in sorted(pending.items()):
+            station_keys = sorted(station_keys)
+            try:
+                tracks = collect_tracks(bucket, station_keys)
+                if tracks:
+                    spotify_playlist.upsert_tracks_into_playlist(
+                        sp, stations[station_id], tracks
+                    )
+                else:
+                    # Nothing usable in them, and there never will be - mark them done
+                    # so they are not re-downloaded every night forever.
+                    logging.warning(
+                        "Station %s: %d new file(s) contained no usable tracks",
+                        station_id, len(station_keys)
+                    )
+                newly_processed.extend(station_keys)
+            except Exception as e:
+                failures.append((station_id, str(e)))
+                logging.error("Error pushing station %s to Spotify: %s", station_id, e)
+
+        if newly_processed and not save_processed_keys(processed | set(newly_processed), bucket):
+            failures.append(('marker', 'could not save the processed marker'))
+
+        logging.info(
+            "Nightly Spotify push: %d file(s) processed, %d failure(s)",
+            len(newly_processed), len(failures)
+        )
+        return {'processed': newly_processed, 'failures': failures}
