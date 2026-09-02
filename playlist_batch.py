@@ -10,6 +10,11 @@ is a cheap filter over the bucket's key list rather than a download of everythin
 import datetime
 import logging
 import re
+from io import StringIO
+
+import pandas as pd
+
+from playlist_upload import download_file_from_s3
 
 BUCKET_NAME = "radio-playlists"
 
@@ -62,3 +67,46 @@ def select_keys(keys, station_id, start_date, end_date):
         len(selected), station_id, start, end
     )
     return sorted(selected)
+
+
+def collect_tracks(bucket, keys):
+    """
+    Unique (artist_name, song_name) pairs across `keys`, in first-seen order.
+
+    Deduping here rather than later matters: a station plays the same song many times
+    a day, and every unique pair costs one Spotify search. Unreadable files are
+    skipped with a warning - the bucket still holds one-byte CSVs from before the
+    scrapers learned to raise on an empty scrape.
+    """
+    seen = set()
+    tracks = []
+
+    for key in keys:
+        content = download_file_from_s3(bucket, key)
+        # download_file_from_s3 returns None on failure; an empty body is one of the
+        # legacy one-byte files.
+        if not content or not content.strip():
+            logging.warning("Skipping %s: empty or could not be downloaded", key)
+            continue
+
+        try:
+            frame = pd.read_csv(StringIO(content))
+        except (pd.errors.EmptyDataError, pd.errors.ParserError) as e:
+            logging.warning("Skipping %s: could not parse it as CSV (%s)", key, e)
+            continue
+
+        for _, row in frame.iterrows():
+            artist = row.get("artist_name")
+            song = row.get("song_name")
+            if pd.isna(artist) or pd.isna(song):
+                continue
+
+            pair = (str(artist).strip(), str(song).strip())
+            if not pair[0] or not pair[1] or pair in seen:
+                continue
+
+            seen.add(pair)
+            tracks.append(pair)
+
+    logging.info("Collected %d unique track(s) from %d file(s)", len(tracks), len(keys))
+    return tracks
