@@ -5,6 +5,13 @@ A radio station plays the same song many times a day, so the batch is deduped
 before a single Spotify search is spent on it. The bucket also still holds
 one-byte files from before the scrapers raised on an empty scrape, and those
 must be skipped rather than crashing a run.
+
+collect_tracks returns (tracks, consumed_keys). The two must be kept distinct:
+a key belongs in consumed_keys only once it was genuinely read - a legacy
+empty/unparseable file counts (it will never yield anything, so it is correct
+to mark it processed forever), but a failed download does not, because that is
+a transient S3 problem and the key must be retried on a later run rather than
+being permanently written off.
 """
 
 import playlist_batch
@@ -26,10 +33,9 @@ def test_tracks_are_collected_in_order(monkeypatch):
         "a.csv": HEADER + "2026-08-14T10:00:00,Artist A,Song A\n2026-08-14T10:05:00,Artist B,Song B\n",
     })
 
-    assert playlist_batch.collect_tracks("bucket", ["a.csv"]) == [
-        ("Artist A", "Song A"),
-        ("Artist B", "Song B"),
-    ]
+    tracks, consumed = playlist_batch.collect_tracks("bucket", ["a.csv"])
+    assert tracks == [("Artist A", "Song A"), ("Artist B", "Song B")]
+    assert consumed == ["a.csv"]
 
 
 def test_repeats_within_a_file_are_deduped(monkeypatch):
@@ -37,7 +43,8 @@ def test_repeats_within_a_file_are_deduped(monkeypatch):
         "a.csv": HEADER + "2026-08-14T10:00:00,Artist A,Song A\n2026-08-14T14:00:00,Artist A,Song A\n",
     })
 
-    assert playlist_batch.collect_tracks("bucket", ["a.csv"]) == [("Artist A", "Song A")]
+    tracks, _ = playlist_batch.collect_tracks("bucket", ["a.csv"])
+    assert tracks == [("Artist A", "Song A")]
 
 
 def test_repeats_across_files_are_deduped(monkeypatch):
@@ -46,10 +53,9 @@ def test_repeats_across_files_are_deduped(monkeypatch):
         "b.csv": HEADER + "2026-08-15T10:00:00,Artist A,Song A\n2026-08-15T11:00:00,Artist C,Song C\n",
     })
 
-    assert playlist_batch.collect_tracks("bucket", ["a.csv", "b.csv"]) == [
-        ("Artist A", "Song A"),
-        ("Artist C", "Song C"),
-    ]
+    tracks, consumed = playlist_batch.collect_tracks("bucket", ["a.csv", "b.csv"])
+    assert tracks == [("Artist A", "Song A"), ("Artist C", "Song C")]
+    assert consumed == ["a.csv", "b.csv"]
 
 
 def test_cyrillic_track_names_survive(monkeypatch):
@@ -57,28 +63,44 @@ def test_cyrillic_track_names_survive(monkeypatch):
         "a.csv": HEADER + "2026-08-14T10:00:00,Кино,Группа крови\n",
     })
 
-    assert playlist_batch.collect_tracks("bucket", ["a.csv"]) == [("Кино", "Группа крови")]
+    tracks, _ = playlist_batch.collect_tracks("bucket", ["a.csv"])
+    assert tracks == [("Кино", "Группа крови")]
 
 
-def test_an_empty_file_is_skipped(monkeypatch):
+def test_an_empty_file_is_skipped_but_still_consumed(monkeypatch):
     fake_bucket(monkeypatch, {
         "empty.csv": "\n",
         "a.csv": HEADER + "2026-08-14T10:00:00,Artist A,Song A\n",
     })
 
-    assert playlist_batch.collect_tracks("bucket", ["empty.csv", "a.csv"]) == [
-        ("Artist A", "Song A")
-    ]
+    tracks, consumed = playlist_batch.collect_tracks("bucket", ["empty.csv", "a.csv"])
+    assert tracks == [("Artist A", "Song A")]
+    # A legacy one-byte file will never yield a track - it is correct to mark it
+    # processed forever, so it must be counted as consumed.
+    assert consumed == ["empty.csv", "a.csv"]
 
 
-def test_a_failed_download_is_skipped(monkeypatch):
+def test_an_unparseable_file_is_skipped_but_still_consumed(monkeypatch):
+    fake_bucket(monkeypatch, {
+        "garbled.csv": "this,is,not\n\"a,valid csv",
+        "a.csv": HEADER + "2026-08-14T10:00:00,Artist A,Song A\n",
+    })
+
+    tracks, consumed = playlist_batch.collect_tracks("bucket", ["garbled.csv", "a.csv"])
+    assert tracks == [("Artist A", "Song A")]
+    assert consumed == ["garbled.csv", "a.csv"]
+
+
+def test_a_failed_download_is_skipped_and_not_consumed(monkeypatch):
     fake_bucket(monkeypatch, {
         "a.csv": HEADER + "2026-08-14T10:00:00,Artist A,Song A\n",
     })
 
-    assert playlist_batch.collect_tracks("bucket", ["missing.csv", "a.csv"]) == [
-        ("Artist A", "Song A")
-    ]
+    tracks, consumed = playlist_batch.collect_tracks("bucket", ["missing.csv", "a.csv"])
+    assert tracks == [("Artist A", "Song A")]
+    # missing.csv was never actually read - a transient S3 error must not be
+    # confused with a permanently empty file, or the key is lost forever.
+    assert consumed == ["a.csv"]
 
 
 def test_rows_with_a_missing_artist_or_song_are_skipped(monkeypatch):
@@ -90,7 +112,8 @@ def test_rows_with_a_missing_artist_or_song_are_skipped(monkeypatch):
         ),
     })
 
-    assert playlist_batch.collect_tracks("bucket", ["a.csv"]) == [("Artist C", "Song C")]
+    tracks, _ = playlist_batch.collect_tracks("bucket", ["a.csv"])
+    assert tracks == [("Artist C", "Song C")]
 
 
 def test_surrounding_whitespace_is_trimmed(monkeypatch):
@@ -98,10 +121,13 @@ def test_surrounding_whitespace_is_trimmed(monkeypatch):
         "a.csv": HEADER + '2026-08-14T10:00:00,"  Artist A  ","  Song A  "\n',
     })
 
-    assert playlist_batch.collect_tracks("bucket", ["a.csv"]) == [("Artist A", "Song A")]
+    tracks, _ = playlist_batch.collect_tracks("bucket", ["a.csv"])
+    assert tracks == [("Artist A", "Song A")]
 
 
-def test_a_file_with_no_rows_yields_nothing(monkeypatch):
+def test_a_file_with_no_rows_yields_nothing_but_is_consumed(monkeypatch):
     fake_bucket(monkeypatch, {"a.csv": HEADER})
 
-    assert playlist_batch.collect_tracks("bucket", ["a.csv"]) == []
+    tracks, consumed = playlist_batch.collect_tracks("bucket", ["a.csv"])
+    assert tracks == []
+    assert consumed == ["a.csv"]

@@ -76,22 +76,39 @@ def select_keys(keys, station_id, start_date, end_date):
 
 def collect_tracks(bucket, keys):
     """
-    Unique (artist_name, song_name) pairs across `keys`, in first-seen order.
+    (tracks, consumed_keys): unique (artist_name, song_name) pairs across `keys`, in
+    first-seen order, and the subset of `keys` that were genuinely read.
 
     Deduping here rather than later matters: a station plays the same song many times
-    a day, and every unique pair costs one Spotify search. Unreadable files are
-    skipped with a warning - the bucket still holds one-byte CSVs from before the
-    scrapers learned to raise on an empty scrape.
+    a day, and every unique pair costs one Spotify search.
+
+    consumed_keys deliberately distinguishes two failure shapes a caller must treat
+    differently:
+
+    - A failed download (download_file_from_s3 returned None) is a transient S3
+      problem. Its key is *excluded* from consumed_keys so a caller does not mark it
+      processed - it must be retried on a later run.
+    - An empty or unparseable file - the bucket still holds one-byte CSVs from before
+      the scrapers learned to raise on an empty scrape - will never yield a track no
+      matter how many times it is read. Its key *is* included in consumed_keys, so a
+      caller is correct to mark it processed forever.
     """
     seen = set()
     tracks = []
+    consumed_keys = []
 
     for key in keys:
         content = download_file_from_s3(bucket, key)
-        # download_file_from_s3 returns None on failure; an empty body is one of the
-        # legacy one-byte files.
-        if not content or not content.strip():
-            logging.warning("Skipping %s: empty or could not be downloaded", key)
+        if content is None:
+            logging.warning("Skipping %s: could not be downloaded", key)
+            continue
+
+        # Reaching here means the key was genuinely read, even if what came back is
+        # empty or unparseable - both are permanent, not transient.
+        consumed_keys.append(key)
+
+        if not content.strip():
+            logging.warning("Skipping %s: empty file", key)
             continue
 
         try:
@@ -113,8 +130,11 @@ def collect_tracks(bucket, keys):
             seen.add(pair)
             tracks.append(pair)
 
-    logging.info("Collected %d unique track(s) from %d file(s)", len(tracks), len(keys))
-    return tracks
+    logging.info(
+        "Collected %d unique track(s) from %d of %d file(s)",
+        len(tracks), len(consumed_keys), len(keys)
+    )
+    return tracks, consumed_keys
 
 
 # Which stored CSVs have already been pushed to Spotify by the nightly job. Kept in
@@ -210,7 +230,10 @@ def run_range_batch(station_id, start_date, end_date, task_id, session_data, buc
         spotify_playlist.update_task(
             task_id, progress=3, message=f'Reading {len(keys)} playlist file(s)...'
         )
-        tracks = collect_tracks(bucket, keys)
+        # This manual path never writes the processed marker (see save_processed_keys),
+        # so it only needs the tracks - which keys were actually consumed matters to
+        # the nightly job's bookkeeping, not to this one.
+        tracks, _ = collect_tracks(bucket, keys)
 
         if not tracks:
             spotify_playlist.update_task(
@@ -306,7 +329,7 @@ def process_new_playlists(bucket=BUCKET_NAME):
         for station_id, station_keys in sorted(pending.items()):
             station_keys = sorted(station_keys)
             try:
-                tracks = collect_tracks(bucket, station_keys)
+                tracks, consumed_keys = collect_tracks(bucket, station_keys)
                 if tracks:
                     spotify_playlist.upsert_tracks_into_playlist(
                         sp, stations[station_id], tracks
@@ -318,7 +341,10 @@ def process_new_playlists(bucket=BUCKET_NAME):
                         "Station %s: %d new file(s) contained no usable tracks",
                         station_id, len(station_keys)
                     )
-                newly_processed.extend(station_keys)
+                # Only keys collect_tracks actually read - a key it could not download
+                # is a transient S3 problem and must be retried on a later run, not
+                # written off as processed alongside its station's other keys.
+                newly_processed.extend(consumed_keys)
             except Exception as e:
                 failures.append((station_id, str(e)))
                 logging.error("Error pushing station %s to Spotify: %s", station_id, e)

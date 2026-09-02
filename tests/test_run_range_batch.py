@@ -43,7 +43,8 @@ def batch(monkeypatch):
     monkeypatch.setattr(station_playlists, "get_playlist_name",
                         lambda station_id: "Radio FM" if str(station_id) == "16134" else None)
     monkeypatch.setattr(playlist_batch, "list_objects_in_bucket", lambda bucket: KEYS)
-    monkeypatch.setattr(playlist_batch, "collect_tracks", lambda bucket, keys: state["tracks"])
+    monkeypatch.setattr(playlist_batch, "collect_tracks",
+                        lambda bucket, keys: (state["tracks"], keys))
     monkeypatch.setattr(spotify_playlist, "create_spotify_client_with_session",
                         lambda session_data: state["client"])
 

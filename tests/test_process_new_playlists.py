@@ -41,7 +41,7 @@ def nightly(monkeypatch):
                         lambda: {"16134": "Radio FM", "38225": "Hit FM"})
     monkeypatch.setattr(playlist_batch, "list_objects_in_bucket", lambda bucket: KEYS)
     monkeypatch.setattr(playlist_batch, "collect_tracks",
-                        lambda bucket, keys: [("Artist", "Song")])
+                        lambda bucket, keys: ([("Artist", "Song")], keys))
     monkeypatch.setattr(playlist_batch, "load_processed_keys",
                         lambda bucket=None: state["processed"])
     monkeypatch.setattr(spotify_playlist, "create_spotify_client_from_store",
