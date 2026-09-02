@@ -294,6 +294,26 @@ def run_range_batch(station_id, start_date, end_date, task_id, session_data, buc
         return False
 
 
+def _pending_keys_by_station(listing, processed, stations):
+    """Not-yet-processed keys from `listing`, grouped by station id.
+
+    Keys for an unconfigured station, or that do not parse as a playlist filename at
+    all, are dropped - there is nowhere to push them.
+    """
+    pending = {}
+    for key in listing:
+        if key in processed:
+            continue
+        parsed = parse_playlist_key(key)
+        if not parsed:
+            continue
+        station_id, _ = parsed
+        if station_id not in stations:
+            continue
+        pending.setdefault(station_id, []).append(key)
+    return pending
+
+
 def process_new_playlists(bucket=BUCKET_NAME):
     """
     Push every not-yet-processed CSV for a configured station into its playlist.
@@ -355,17 +375,7 @@ def process_new_playlists(bucket=BUCKET_NAME):
             )
             failures.append(('s3', 'bucket listing returned nothing - S3 may be unreachable'))
 
-        pending = {}
-        for key in listing:
-            if key in processed:
-                continue
-            parsed = parse_playlist_key(key)
-            if not parsed:
-                continue
-            station_id, _ = parsed
-            if station_id not in stations:
-                continue
-            pending.setdefault(station_id, []).append(key)
+        pending = _pending_keys_by_station(listing, processed, stations)
 
         for station_id, station_keys in sorted(pending.items()):
             station_keys = sorted(station_keys)
