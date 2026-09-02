@@ -16,7 +16,10 @@ from io import StringIO
 
 import pandas as pd
 
-from playlist_upload import download_file_from_s3, put_object_to_s3
+from playlist_upload import download_file_from_s3, list_objects_in_bucket, put_object_to_s3
+
+import spotify_playlist
+import station_playlists
 
 BUCKET_NAME = "radio-playlists"
 
@@ -155,3 +158,85 @@ def save_processed_keys(keys, bucket=BUCKET_NAME):
         "updated_at": datetime.datetime.now().isoformat(timespec="seconds"),
     }
     return put_object_to_s3(bucket, PROCESSED_MARKER_KEY, json.dumps(payload, indent=2))
+
+
+def run_range_batch(station_id, start_date, end_date, task_id, session_data, bucket=BUCKET_NAME):
+    """
+    Upsert every stored CSV for a station between two load dates into its playlist.
+
+    Runs in a daemon thread behind POST /create-playlist-batch, so it never raises:
+    the caller only ever sees the task store, and an escaping exception would leave
+    the task stuck at "processing" forever.
+
+    Deliberately does not write the processed marker - see save_processed_keys.
+    """
+    try:
+        spotify_playlist.start_task(task_id, message='Selecting playlist files...')
+
+        playlist_name = station_playlists.get_playlist_name(station_id)
+        if not playlist_name:
+            spotify_playlist.update_task(
+                task_id, status='error',
+                message=f"Station {station_id} is not configured in station_playlists.json"
+            )
+            return False
+
+        sp = spotify_playlist.create_spotify_client_with_session(session_data)
+        if not sp:
+            spotify_playlist.update_task(
+                task_id, status='error',
+                message='Not authenticated with Spotify. Connect your account and try again.'
+            )
+            return False
+
+        keys = select_keys(list_objects_in_bucket(bucket), station_id, start_date, end_date)
+        empty_result = {
+            'playlist_name': playlist_name,
+            'added': 0,
+            'skipped_existing': 0,
+            'unmatched': [],
+            'files': len(keys),
+        }
+
+        if not keys:
+            spotify_playlist.update_task(
+                task_id, status='completed', progress=100,
+                message=(f"No playlist files for station {station_id} between "
+                         f"{start_date} and {end_date}"),
+                result=empty_result
+            )
+            return True
+
+        spotify_playlist.update_task(
+            task_id, progress=3, message=f'Reading {len(keys)} playlist file(s)...'
+        )
+        tracks = collect_tracks(bucket, keys)
+
+        if not tracks:
+            spotify_playlist.update_task(
+                task_id, status='completed', progress=100,
+                message=f"The {len(keys)} selected file(s) contained no usable tracks",
+                result=empty_result
+            )
+            return True
+
+        result = spotify_playlist.upsert_tracks_into_playlist(
+            sp, playlist_name, tracks, task_id
+        )
+        result['files'] = len(keys)
+
+        spotify_playlist.update_task(
+            task_id, status='completed', progress=100,
+            message=(f"Added {result['added']} track(s) to '{playlist_name}' - "
+                     f"{result['skipped_existing']} already there, "
+                     f"{len(result['unmatched'])} not found on Spotify"),
+            result=result
+        )
+        return True
+
+    except Exception as e:
+        logging.error(f"Error running batch for station {station_id}: {e}")
+        spotify_playlist.update_task(
+            task_id, status='error', message=f'Error running batch: {str(e)}'
+        )
+        return False
