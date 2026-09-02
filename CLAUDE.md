@@ -122,7 +122,7 @@ refreshes the token - without it a mid-run refresh would be lost exactly the way
 `dict(session)` copy loses one.
 
 `station_playlists.json` ships with placeholder names, e.g. `"16134": "Radio 16134"`.
-**Edit real names in before the first nightly run.** Playlists resolve by exact name
+**Edit in the real names before the first nightly run.** Playlists resolve by exact name
 and `find_or_create_playlist` creates one on a miss, so the first run creates a
 playlist literally called "Radio 16134"; renaming the config afterwards does not
 rename that playlist, it creates a *second* one under the new name, and the tracks
