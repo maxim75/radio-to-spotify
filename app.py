@@ -159,10 +159,14 @@ def scrape_and_upload_playlists():
         # was worse than redundant: a bare open() uses the platform default encoding,
         # which is ASCII in the container, and the Cyrillic track names blew up on it.
         playlist_filename = load_playlist.load_playlist()
-        playlist_upload.upload_file_to_s3(
-            playlist_filename, "radio-playlists", playlist_filename.split("/")[-1]
-        )
-        uploaded.append(playlist_filename.split("/")[-1])
+        object_name = playlist_filename.split("/")[-1]
+        # upload_file_to_s3 swallows its exceptions, so this return value is the only
+        # sign the object never landed. Appending regardless reported a playlist as
+        # uploaded when S3 had rejected it, in the cron log and in /load_playlist alike.
+        if playlist_upload.upload_file_to_s3(playlist_filename, "radio-playlists", object_name):
+            uploaded.append(object_name)
+        else:
+            failures.append(("retrofm", f"upload to S3 failed for {object_name}"))
     except Exception as e:
         failures.append(("retrofm", str(e)))
         logging.error(f"Error scraping retrofm: {e}")
@@ -184,10 +188,11 @@ def scrape_and_upload_playlists():
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = os.path.join(load_playlist.DATA_DIR, f"playlist_{station_id}_{timestamp}.csv")
             playlist_df.to_csv(filename, index=False)
-            playlist_upload.upload_file_to_s3(
-                filename, "radio-playlists", filename.split("/")[-1]
-            )
-            uploaded.append(filename.split("/")[-1])
+            object_name = filename.split("/")[-1]
+            if playlist_upload.upload_file_to_s3(filename, "radio-playlists", object_name):
+                uploaded.append(object_name)
+            else:
+                failures.append((str(station_id), f"upload to S3 failed for {object_name}"))
         except Exception as e:
             failures.append((str(station_id), str(e)))
             logging.error(f"Error scraping station {station_id}: {e}")
@@ -409,12 +414,11 @@ def create_playlist_from_file():
                 spotify_playlist.create_playlist_from_csv(csv_content, playlist_name, task_id, session_data)
             except Exception as e:
                 logging.error(f"Error in background playlist creation: {e}")
-                # Update task with error status
-                if task_id in spotify_playlist.tasks:
-                    spotify_playlist.tasks[task_id].update({
-                        'status': 'error',
-                        'message': f'Error during playlist creation: {str(e)}'
-                    })
+                spotify_playlist.update_task(
+                    task_id,
+                    status='error',
+                    message=f'Error during playlist creation: {str(e)}'
+                )
         
         # Start the background thread
         thread = threading.Thread(target=run_playlist_creation)
@@ -437,7 +441,7 @@ def create_playlist_from_file():
 @app.route('/playlist_progress/<task_id>')
 def playlist_progress(task_id):
     """Get the progress of a playlist creation task"""
-    task = spotify_playlist.tasks.get(task_id)
+    task = spotify_playlist.get_task(task_id)
     if not task:
         return {
             'status': 'error',
@@ -504,12 +508,11 @@ def merge_playlists():
                 spotify_playlist.merge_playlists(source_playlist_id, target_playlist_id, task_id, session_data)
             except Exception as e:
                 logging.error(f"Error in background playlist merging: {e}")
-                # Update task with error status
-                if task_id in spotify_playlist.tasks:
-                    spotify_playlist.tasks[task_id].update({
-                        'status': 'error',
-                        'message': f'Error during playlist merging: {str(e)}'
-                    })
+                spotify_playlist.update_task(
+                    task_id,
+                    status='error',
+                    message=f'Error during playlist merging: {str(e)}'
+                )
         
         # Start the background thread
         thread = threading.Thread(target=run_merge_process)

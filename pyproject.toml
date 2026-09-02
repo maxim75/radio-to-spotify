@@ -18,9 +18,18 @@ dependencies = [
 ]
 
 [dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
 # uWSGI is only used by the Docker/production entrypoint and needs a C toolchain
 # to build, so it is kept out of the default sync.
 prod = ["uwsgi"]
 
 [tool.uv]
 package = false
+
+[tool.pytest.ini_options]
+# The app is a flat set of modules at the repo root rather than an installed
+# package (uv is configured with package = false), so tests import them from there.
+pythonpath = ["."]
+testpaths = ["tests"]

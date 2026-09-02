@@ -33,7 +33,15 @@ docker-compose up --build -d
 
 The Docker image installs deps with `uv sync --locked --group prod` and puts `/app/.venv/bin` on `PATH`, so `uwsgi` and `python` resolve directly inside the container without `uv run`.
 
-There is no test suite, no linter config, and no database — README sections describing `pytest`, `flake8`, `npm test`, `npm run lint`, `npm run dev`, and `flask db` describe things that do not exist in this repo. The README's API endpoint list is also stale; read `app.py` for the real routes.
+Python tests run under pytest (in the `dev` dependency group, so `uv sync` installs it):
+
+```bash
+uv run pytest
+```
+
+`[tool.pytest.ini_options]` puts the repo root on `pythonpath` because the app is flat modules rather than an installed package. Coverage is partial — the task store, `create_playlist_from_csv` progress, the progress route, and `scrape_and_upload_playlists`' outcome accounting. The scrapers themselves and all live Spotify/S3 network paths are untested.
+
+There is no frontend test runner, no linter config, and no database — README sections describing `flake8`, `npm test`, `npm run lint`, `npm run dev`, and `flask db` describe things that do not exist in this repo. The README's API endpoint list is also stale; read `app.py` for the real routes.
 
 Credentials come from `.env` (copy `.env.template`): `SPOTIPY_CLIENT_ID/SECRET/REDIRECT_URI`, `SPOTIFY_USERNAME`, `AWS_ACCESS_KEY_ID/SECRET_ACCESS_KEY/REGION`, `BASIC_AUTH_USERNAME/PASSWORD`. `.flaskenv` sets `FLASK_APP`/debug. Only `spotify_playlist.py` calls `load_dotenv()`, so AWS vars reaching `playlist_upload.py`/`app.py` depend on that import happening first (it does, via `app.py`) — don't reorder imports in `app.py` casually.
 
@@ -44,7 +52,7 @@ Pipeline: scrape → CSV on disk → S3 bucket `radio-playlists` → Spotify pla
 - **[load_playlist.py](load_playlist.py)** — scrapers for two sources with different shapes. `get_playlist_from_radiotut(station_id, day)` parses HTML (day is an offset, station id is a slug like `retrofm`, Moscow time). `get_playlist_from_radoxo(station_id, date)` hits Radoxo's `playlist-for-day` JSON endpoint, whose `main` key holds an HTML fragment of `li.playlist-track` rows (`.playlist-track__status[data-ts]` is a UTC epoch, `__song` and `__artist` are the text). Both return a DataFrame with `time`, `artist_name`, `song_name` — those exact column names, `PLAYLIST_COLUMNS`, are the contract consumed by `create_playlist_from_csv`. Rotates User-Agent via `latest-user-agents`.
 
   raddio.net became **Radoxo** and its ids did not carry over, so `RADOXO_STATION_IDS` is empty; repopulate it with `get_radoxo_station_id('https://radoxo.com/<country>/<slug>')`. Radoxo only retains about 7 days of history. The scraper raises `NoTracksFoundError` instead of returning an empty frame, and `raise_for_status()` turns a retired id into a 404 — both deliberate, because silently returning nothing is exactly what filled the bucket with 877 one-byte CSVs.
-- **[playlist_upload.py](playlist_upload.py)** — thin boto3 S3 wrapper. Every function swallows exceptions and returns `[]`/`None`, so callers must null-check rather than expect raises.
+- **[playlist_upload.py](playlist_upload.py)** — thin boto3 S3 wrapper. Every function swallows exceptions rather than raising, so the return value is the *only* failure signal: `list_objects_in_bucket` gives `[]`, `download_file_from_s3` gives `None`, and `upload_file_to_s3` gives `False`. Check it. Ignoring the upload result is what made a playlist that never reached S3 get counted as uploaded, in the cron log and in `/load_playlist` alike.
 - **[spotify_playlist.py](spotify_playlist.py)** — all Spotify logic. Track matching is a single `sp.search(q=f"{track} artist:{artist}", limit=1)` per row; unmatched tracks are silently dropped. Writes to Spotify batch at 100 URIs (API limit).
 - **[app.py](app.py)** — routes, scheduler, background threads.
 - **static/ts/** — React 18 + react-router. `main.tsx` mounts routes `/` (`PlaylistsPage`, S3 CSVs) and `/spotify` (`SpotifyPlaylistsPage`, live Spotify playlists with merge). Flask serves the same `templates/playlists.html` for both `/` and `/spotify` so client-side routing survives a hard reload — a new client route needs a matching Flask route rendering that template.
@@ -53,7 +61,7 @@ Pipeline: scrape → CSV on disk → S3 bucket `radio-playlists` → Spotify pla
 
 CSVs are written to `load_playlist.DATA_DIR`, which defaults to `/var/data` and is overridable with `PLAYLIST_DATA_DIR`. That default only exists inside the container (`docker-compose.yaml` mounts `./data:/var/data`), so set the env var for a bare macOS run. Station ids now live in one place (`load_playlist.RADOXO_STATION_IDS`), but the `radio-playlists` bucket name is still a literal scattered across `app.py`, `load_playlist.py`, and `spotify_playlist.py`.
 
-`scrape_and_upload_playlists()` in `app.py` is the single scrape path shared by `/load_playlist` and the cron job. It **only uploads a playlist that contains tracks**, and one failing source never aborts the others — it returns `(uploaded, failures)` so both callers can report per-station outcomes.
+`scrape_and_upload_playlists()` in `app.py` is the single scrape path shared by `/load_playlist` and the cron job. It **only uploads a playlist that contains tracks**, and one failing source never aborts the others — it returns `(uploaded, failures)` so both callers can report per-station outcomes. A station lands in `uploaded` only once S3 has confirmed the object; a rejected upload is a `failures` entry, not a silent success.
 
 ### HTTP Basic Auth
 
@@ -63,7 +71,9 @@ Adding a route means it is protected automatically. Anything that must be public
 
 ### Async work and progress
 
-Long operations (create-from-CSV, merge) return a `task_id` immediately and run in a daemon `threading.Thread`; the frontend polls `/playlist_progress/<task_id>`. Progress lives in the module-level `spotify_playlist.tasks` dict — **in-memory, per-process, never evicted**. Under the Docker `uwsgi -p 4` config a poll can land on a worker that has no record of the task, and the APScheduler cron job (`23:40`, registered at import in `app.py`) is registered once per worker.
+Long operations (create-from-CSV, merge) return a `task_id` immediately and run in a daemon `threading.Thread`; the frontend polls `/playlist_progress/<task_id>`. Progress lives in an in-process store in `spotify_playlist.py` — reach it through `start_task`/`update_task`/`get_task`, never the `_tasks` dict, which is guarded by a lock and swept of entries older than `TASK_TTL_SECONDS` (1h) on every `start_task`. `update_task` on an evicted id is a deliberate no-op.
+
+That store is in-process, so **uWSGI must keep running a single process** (`-p 1 --threads 8` in the Dockerfile). Raising `-p` again silently breaks polling: the POST that starts a job and the GET that polls it land in different address spaces, the poll 404s, and the browser reports a healthy job as failed. Threads are the right axis anyway — every job is I/O-bound on Spotify and S3. One process also means the APScheduler cron job (`23:40`, registered at import in `app.py`) is registered exactly once, and `should_start_scheduler()` is belt-and-braces rather than load-bearing.
 
 ### Spotify auth
 

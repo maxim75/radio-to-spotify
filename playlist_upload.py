@@ -47,7 +47,13 @@ def download_file_from_s3(bucket_name, object_name):
         return None
 
 def upload_file_to_s3(file_name, bucket, object_name):
-    """Upload a file to an S3 bucket"""
+    """
+    Upload a file to an S3 bucket. Returns True if the object landed, False otherwise.
+
+    Like the rest of this module it swallows the exception rather than raising, so the
+    return value is a caller's only signal that the upload failed. Ignoring it means
+    reporting a playlist as uploaded when nothing reached S3.
+    """
 
     try:
         # Create an S3 client with explicit credentials
@@ -58,11 +64,16 @@ def upload_file_to_s3(file_name, bucket, object_name):
             region_name=AWS_REGION,
         )
 
-        upload_response = s3_client.upload_file(file_name, bucket, object_name)
+        s3_client.upload_file(file_name, bucket, object_name)
 
         logging.info(f"Object '{object_name}' successfully created in bucket '{bucket}'.")
+        return True
 
+    # Logged at error, not info: these were invisible in the log precisely because a
+    # failed upload announced itself at the same level as a successful one.
     except ClientError as e:
-        logging.info(f"Error creating object: {e}")
+        logging.error(f"Error creating object '{object_name}' in bucket '{bucket}': {e}")
+        return False
     except Exception as e:
-        logging.info(f"An unexpected error occurred: {e}")
+        logging.error(f"Unexpected error uploading '{object_name}' to '{bucket}': {e}")
+        return False
