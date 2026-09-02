@@ -75,6 +75,42 @@ Long operations (create-from-CSV, merge) return a `task_id` immediately and run 
 
 That store is in-process, so **uWSGI must keep running a single process** (`-p 1 --threads 8` in the Dockerfile). Raising `-p` again silently breaks polling: the POST that starts a job and the GET that polls it land in different address spaces, the poll 404s, and the browser reports a healthy job as failed. Threads are the right axis anyway — every job is I/O-bound on Spotify and S3. One process also means the APScheduler cron job (`23:40`, registered at import in `app.py`) is registered exactly once, and `should_start_scheduler()` is belt-and-braces rather than load-bearing.
 
+### Batch upsert into a configured playlist
+
+`station_playlists.json` maps a station id to the Spotify playlist its tracks belong
+to (`{"16134": "Radio FM"}`); `STATION_PLAYLISTS_CONFIG` overrides the path. **Station
+ids are opaque strings** - Radoxo ids look numeric but the radiotut source uses the
+slug `retrofm`, and both write into the same bucket. The file is re-read on every
+call, so editing it needs no restart. A broken config yields an empty mapping and a
+400 from the endpoint, never an import-time crash.
+
+`POST /create-playlist-batch` (`{station_id, start_date, end_date}`, YYYY-MM-DD, both
+ends inclusive) selects stored CSVs **by the load date in the filename**, not by the
+play times inside them, then upserts into the configured playlist: deduped within the
+batch and against the playlist's existing track URIs, so running it twice adds nothing
+the second time. It returns a `task_id` polled at `/playlist_progress`, whose response
+now carries a nullable `result` with `added`, `skipped_existing`, `files` and the full
+list of tracks Spotify could not find.
+
+`playlist_batch.process_new_playlists()` runs from `my_scheduled_job` right after the
+scrape and does the same for files that have not been pushed yet. `processed_playlists.json`
+in the bucket records which those are. **A key is recorded only once its upsert
+succeeded** - a Spotify outage leaves those files for tomorrow rather than swallowing
+them. `load_processed_keys` returns `None` (not an empty set) when the marker cannot be
+read, and the job bootstraps an empty marker rather than treating an S3 failure as "nothing
+processed yet"; if that write also fails it skips the run instead of reprocessing the
+whole bucket.
+
+The nightly job has no Flask session, so it authenticates from `spotify_token_store` -
+`spotify_token.json` in `DATA_DIR`, written owner-only (0600) via a temp file plus
+atomic rename, overridable with `SPOTIFY_TOKEN_STORE`. It is written on every OAuth
+callback and **deleted by `/spotify/logout`**. It is a long-lived credential granting
+playlist read/write, which is why it lives on the volume (already gitignored) rather
+than in the S3 bucket next to the CSVs. `create_spotify_client_from_store` builds the
+client over a `WriteThroughTokenStore`, a dict that re-persists the file when spotipy
+refreshes the token - without it a mid-run refresh would be lost exactly the way a
+`dict(session)` copy loses one.
+
 ### Spotify auth
 
 `SessionCacheHandler` (a spotipy `CacheHandler`) stores `spotify_token_info` in the Flask session cookie instead of the `.cache*` files. Flow: `/spotify/auth` → Spotify → `/callback` → `handle_oauth_callback(code, session)`.
