@@ -145,6 +145,22 @@ PROCESSED_MARKER_KEY = "processed_playlists.json"
 # keep two overlapping nightly runs from interleaving a read and a write.
 _marker_lock = threading.Lock()
 
+# The processed marker starts empty by design, so the very first nightly run after
+# deploy would otherwise see every pending key for every station as "new" in one go -
+# potentially years of daily CSVs plus the ~877 legacy one-byte files, one S3 GET and
+# one Spotify search per unique track, all while holding _marker_lock. That risks
+# prolonged 429 backoff and can push a playlist past Spotify's 10,000-item cap, after
+# which playlist_add_items fails, the station is recorded as a failure, and the same
+# oversized batch is retried forever.
+#
+# Seeding the marker at deploy is an operational step with no code guard and can be
+# forgotten. Bounding to a recent date window permanently strands anything older than
+# the window - exactly the silent loss this feature exists to prevent. A per-station,
+# per-run cap instead bounds every run and drains the backlog chronologically (oldest
+# first, since filenames sort lexicographically by load date) over successive nights,
+# losing nothing.
+MAX_KEYS_PER_STATION_PER_RUN = 50
+
 
 def load_processed_keys(bucket=BUCKET_NAME):
     """
@@ -328,6 +344,14 @@ def process_new_playlists(bucket=BUCKET_NAME):
 
         for station_id, station_keys in sorted(pending.items()):
             station_keys = sorted(station_keys)
+            if len(station_keys) > MAX_KEYS_PER_STATION_PER_RUN:
+                remaining = len(station_keys) - MAX_KEYS_PER_STATION_PER_RUN
+                logging.info(
+                    "Station %s: capping this run to the oldest %d of %d pending "
+                    "file(s) - %d remain for a later run",
+                    station_id, MAX_KEYS_PER_STATION_PER_RUN, len(station_keys), remaining
+                )
+                station_keys = station_keys[:MAX_KEYS_PER_STATION_PER_RUN]
             try:
                 tracks, consumed_keys = collect_tracks(bucket, station_keys)
                 if tracks:

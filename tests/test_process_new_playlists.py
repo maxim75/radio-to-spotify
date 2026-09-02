@@ -7,6 +7,7 @@ be retried tomorrow, not swallow them - which is the same failure mode as counti
 a playlist as uploaded when S3 rejected it.
 """
 
+import datetime
 import os
 
 import pytest
@@ -160,3 +161,32 @@ def test_a_marker_save_failure_after_a_run_is_reported(nightly):
 
     assert len(outcome["processed"]) == 2
     assert ("marker", "could not save the processed marker") in outcome["failures"]
+
+
+def test_a_stations_backlog_is_capped_per_run(nightly, monkeypatch):
+    # The marker starts empty by design, so a first run after deploy could otherwise
+    # see years of daily CSVs plus ~877 legacy one-byte files for a single station in
+    # one go - one S3 GET and one Spotify search per unique track, all under
+    # _marker_lock. The cap bounds every run and drains the backlog oldest-first over
+    # successive nights instead.
+    dates = [
+        (datetime.date(2026, 1, 1) + datetime.timedelta(days=i)).strftime("%Y%m%d")
+        for i in range(60)
+    ]
+    all_keys = [f"playlist_16134_{d}_000000.csv" for d in dates]
+    # Shuffle the S3 listing order to prove the cap is applied after sorting, not
+    # before - an unsorted "first 50" would not be the oldest 50.
+    shuffled = list(reversed(all_keys))
+    monkeypatch.setattr(playlist_batch, "list_objects_in_bucket", lambda bucket: shuffled)
+    monkeypatch.setattr(playlist_batch.station_playlists, "get_configured_stations",
+                        lambda: {"16134": "Radio FM"})
+
+    outcome = playlist_batch.process_new_playlists()
+
+    assert len(outcome["processed"]) == playlist_batch.MAX_KEYS_PER_STATION_PER_RUN
+    assert sorted(outcome["processed"]) == all_keys[:playlist_batch.MAX_KEYS_PER_STATION_PER_RUN]
+
+    # The remaining 10 keys were left untouched for a later run to pick up.
+    nightly["processed"] = set(outcome["processed"])
+    outcome_two = playlist_batch.process_new_playlists()
+    assert sorted(outcome_two["processed"]) == all_keys[playlist_batch.MAX_KEYS_PER_STATION_PER_RUN:]
