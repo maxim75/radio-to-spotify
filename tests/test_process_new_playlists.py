@@ -205,3 +205,22 @@ def test_an_empty_bucket_listing_is_a_reported_failure_not_a_clean_run(nightly, 
     assert outcome["processed"] == []
     assert nightly["upserts"] == []
     assert ("s3", "bucket listing returned nothing - S3 may be unreachable") in outcome["failures"]
+
+
+def test_files_with_no_usable_tracks_are_still_marked_processed(nightly, monkeypatch):
+    # Deliberate and destructive: a file that yields nothing never will, no matter
+    # how many times it is re-read, so it must be marked processed rather than
+    # re-downloaded every night forever. The fixture's default collect_tracks stub
+    # always returns a track, so this pins the case where it does not - especially
+    # now that a failed *download* (fix 3) behaves differently and must not be
+    # confused with this one.
+    monkeypatch.setattr(playlist_batch, "collect_tracks", lambda bucket, keys: ([], keys))
+
+    outcome = playlist_batch.process_new_playlists()
+
+    assert sorted(outcome["processed"]) == [
+        "playlist_16134_20260814_072254.csv",
+        "playlist_38225_20260814_072300.csv",
+    ]
+    assert outcome["failures"] == []
+    assert nightly["upserts"] == []
