@@ -9,6 +9,7 @@ import time
 import uuid
 from io import StringIO
 from playlist_upload import download_file_from_s3, list_objects_in_bucket
+import spotify_token_store
 
 # Load environment variables if .env file exists
 if os.path.exists('.env'):
@@ -136,6 +137,15 @@ def handle_oauth_callback(code, session_data):
         # Save the token info for future use
         auth_manager.cache_handler.save_token_to_cache(token_info)
         logging.info("Successfully saved Spotify access token to the session")
+
+        # Also persist it server-side so the nightly job can reach Spotify with no
+        # browser session. A failure here is logged and ignored: being unable to arm
+        # the unattended job must not stop this user from logging in.
+        if not spotify_token_store.save_token(token_info):
+            logging.error(
+                "Logged in, but the Spotify token could not be stored - the nightly "
+                "batch will skip Spotify until this is fixed"
+            )
         return True
 
     except Exception as e:
@@ -167,6 +177,30 @@ def create_spotify_client_with_session(session_data):
     except Exception as e:
         logging.error(f"Error creating Spotify client with session data: {e}")
         return None
+
+def create_spotify_client_from_store():
+    """
+    Build a Spotify client from the token persisted on disk, for unattended jobs.
+
+    Returns None when nothing is stored - the scheduler thread has no console, so a
+    client built without a token would print "Enter the URL you were redirected to:"
+    and raise EOFError.
+
+    The client is built over a WriteThroughTokenStore rather than a plain dict, so a
+    token spotipy refreshes during the run is persisted instead of being discarded.
+    """
+    token_info = spotify_token_store.load_token()
+    if not token_info:
+        logging.warning(
+            "No stored Spotify token - unattended jobs cannot reach Spotify. Connect "
+            "a Spotify account once to arm them."
+        )
+        return None
+
+    session_data = spotify_token_store.WriteThroughTokenStore(
+        {'spotify_token_info': token_info}
+    )
+    return create_spotify_client_with_session(session_data)
 
 def search_track(sp, artist, track):
     """
@@ -398,44 +432,163 @@ def get_user_playlists_with_session(session_data):
         logging.error(f"Error getting user playlists: {e}")
         return None
 
-def get_playlist_tracks_with_session(playlist_id, session_data):
+def get_playlist_tracks(sp, playlist_id):
     """
-    Get all tracks from a specific playlist using provided session data
+    All tracks in a playlist, given an already-built client.
+
+    The paging loop lives here rather than in get_playlist_tracks_with_session so
+    callers that already hold a client - the upsert, and the nightly job - do not
+    have to rebuild one from session data they may not have.
     """
     try:
-        sp = create_spotify_client_with_session(session_data)
-        if not sp:
-            logging.error("Failed to create Spotify client for getting playlist tracks")
-            return None
-            
         tracks = []
         results = sp.playlist_tracks(playlist_id)
-        
+
         while results:
             for item in results['items']:
                 track = item['track']
                 if track:  # Handle deleted tracks
-                    track_info = {
+                    tracks.append({
                         'id': track['id'],
                         'name': track['name'],
                         'artist': track['artists'][0]['name'] if track['artists'] else '',
                         'uri': track['uri'],
                         'album': track['album']['name'] if track['album'] else ''
-                    }
-                    tracks.append(track_info)
-            
-            # Check if there are more tracks to fetch
+                    })
+
             if results['next']:
                 results = sp.next(results)
             else:
                 break
-                
+
         logging.info(f"Retrieved {len(tracks)} tracks from playlist {playlist_id}")
         return tracks
-        
+
     except Exception as e:
         logging.error(f"Error getting playlist tracks: {e}")
         return None
+
+
+def get_playlist_tracks_with_session(playlist_id, session_data):
+    """
+    Get all tracks from a specific playlist using provided session data
+    """
+    sp = create_spotify_client_with_session(session_data)
+    if not sp:
+        logging.error("Failed to create Spotify client for getting playlist tracks")
+        return None
+
+    return get_playlist_tracks(sp, playlist_id)
+
+
+def find_or_create_playlist(sp, playlist_name):
+    """
+    The id of the user's own playlist with this exact name, creating it if absent.
+
+    Only playlists the user owns are considered: a followed playlist that happens to
+    share the name cannot be modified, so matching it would make every add fail.
+    Names are not unique, so if several match the first is used and the ambiguity is
+    logged rather than guessed at silently.
+    """
+    user_id = sp.current_user()['id']
+
+    matches = []
+    results = sp.user_playlists(user_id)
+    while results:
+        for item in results['items']:
+            if item['name'] == playlist_name and item['owner']['id'] == user_id:
+                matches.append(item['id'])
+        if results.get('next'):
+            results = sp.next(results)
+        else:
+            break
+
+    if matches:
+        if len(matches) > 1:
+            logging.warning(
+                "%d playlists are named '%s'; using %s. Rename the others to remove "
+                "the ambiguity.", len(matches), playlist_name, matches[0]
+            )
+        return matches[0]
+
+    playlist = sp.user_playlist_create(user_id, playlist_name, public=False)
+    logging.info(f"Created playlist '{playlist_name}' ({playlist['id']})")
+    return playlist['id']
+
+
+def upsert_tracks_into_playlist(sp, playlist_name, tracks, task_id=None):
+    """
+    Add `tracks` to the named playlist, skipping anything already in it.
+
+    `tracks` is a sequence of (artist, song) pairs, already deduped by the caller.
+    Running this twice over the same input adds nothing the second time: URIs are
+    checked against what the playlist already holds and against each other, so two
+    different track names that resolve to the same recording are added once.
+
+    `task_id` is optional - update_task is a no-op for an unknown id, so the nightly
+    job can call this without registering a task at all.
+
+    Returns {"playlist_id", "playlist_name", "added", "skipped_existing", "unmatched"}.
+    """
+    update_task(task_id, progress=5, message=f"Resolving playlist '{playlist_name}'...")
+    playlist_id = find_or_create_playlist(sp, playlist_name)
+
+    update_task(task_id, progress=10, message='Reading tracks already in the playlist...')
+    existing = get_playlist_tracks(sp, playlist_id) or []
+    known_uris = {track['uri'] for track in existing}
+
+    new_uris = []
+    unmatched = []
+    total = len(tracks)
+
+    for index, (artist, song) in enumerate(tracks):
+        # 10-70% is the search phase, matching create_playlist_from_csv's shape.
+        update_task(
+            task_id,
+            progress=10 + int(index / total * 60) if total else 10,
+            message=f'Searching for track: {song} by {artist}'
+        )
+
+        uri = search_track(sp, artist, song)
+        if not uri:
+            unmatched.append({'artist': artist, 'song': song})
+            continue
+        if uri in known_uris:
+            continue
+
+        known_uris.add(uri)
+        new_uris.append(uri)
+
+    skipped_existing = total - len(new_uris) - len(unmatched)
+
+    update_task(
+        task_id, progress=75,
+        message=f'Adding {len(new_uris)} new track(s) to {playlist_name}...'
+    )
+
+    batch_size = 100  # Spotify API limit
+    for i in range(0, len(new_uris), batch_size):
+        batch = new_uris[i:i + batch_size]
+        sp.playlist_add_items(playlist_id, batch)
+        update_task(
+            task_id,
+            progress=75 + int(i / len(new_uris) * 20),
+            message=f'Adding tracks {i + 1} to {min(i + batch_size, len(new_uris))}'
+        )
+
+    logging.info(
+        "Upsert into '%s': %d added, %d already present, %d not found on Spotify",
+        playlist_name, len(new_uris), skipped_existing, len(unmatched)
+    )
+
+    return {
+        'playlist_id': playlist_id,
+        'playlist_name': playlist_name,
+        'added': len(new_uris),
+        'skipped_existing': skipped_existing,
+        'unmatched': unmatched,
+    }
+
 
 def merge_playlists(source_playlist_id, target_playlist_id, task_id, session_data=None):
     """
@@ -563,6 +716,10 @@ def clear_spotify_token(session_data=None):
             logging.warning("clear_spotify_token called without session_data, no action taken")
             return False
         
+        # Clear the server-side store too. An explicit logout that leaves the
+        # unattended credential armed is the wrong surprise.
+        spotify_token_store.clear_token()
+
         if 'spotify_token_info' in session_data:
             del session_data['spotify_token_info']
             logging.info("Spotify token cleared from session")

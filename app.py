@@ -10,6 +10,8 @@ import playlist_upload
 import pandas as pd
 import datetime
 import spotify_playlist
+import playlist_batch
+import station_playlists
 from urllib.parse import urlencode
 from io import StringIO
 import uuid
@@ -200,7 +202,13 @@ def scrape_and_upload_playlists():
     return uploaded, failures
 
 def my_scheduled_job():
-    """Scheduled job to load playlists without Flask context"""
+    """
+    Scheduled job: scrape into S3, then push anything not yet in Spotify.
+
+    The two halves are independently guarded. A Spotify outage must not hide the
+    scrape's result, and files uploaded on an earlier night may still be waiting,
+    so a failing scrape must not skip the push.
+    """
     try:
         uploaded, failures = scrape_and_upload_playlists()
         if failures:
@@ -210,6 +218,19 @@ def my_scheduled_job():
         logging.info(f"Scheduled playlist loading uploaded {len(uploaded)} playlist(s)")
     except Exception as e:
         logging.error(f"Error in scheduled playlist loading: {e}")
+
+    try:
+        outcome = playlist_batch.process_new_playlists()
+        if outcome['failures']:
+            logging.error(
+                f"Nightly Spotify push finished with {len(outcome['failures'])} "
+                f"failure(s): {outcome['failures']}"
+            )
+        logging.info(
+            f"Nightly Spotify push processed {len(outcome['processed'])} playlist file(s)"
+        )
+    except Exception as e:
+        logging.error(f"Error in the nightly Spotify push: {e}")
 
 @app.route('/spotify/auth')
 def spotify_auth():
@@ -438,6 +459,90 @@ def create_playlist_from_file():
             'message': f'Error creating playlist: {str(e)}'
         }, 500
 
+@app.route('/api/station-playlists')
+def api_station_playlists():
+    """The configured station -> Spotify playlist name map, for the batch form"""
+    return {'status': 'success', 'stations': station_playlists.get_configured_stations()}
+
+
+@app.route('/create-playlist-batch', methods=['POST'])
+def create_playlist_batch():
+    """Upsert a station's stored playlists over a date range into its Spotify playlist"""
+    try:
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return {
+                'status': 'error',
+                'message': 'A JSON body with station_id, start_date and end_date is required'
+            }, 400
+
+        station_id = str(data.get('station_id') or '').strip()
+        start_raw = str(data.get('start_date') or '').strip()
+        end_raw = str(data.get('end_date') or '').strip()
+
+        if not (station_id and start_raw and end_raw):
+            return {
+                'status': 'error',
+                'message': 'station_id, start_date and end_date are all required'
+            }, 400
+
+        if not station_playlists.get_playlist_name(station_id):
+            return {
+                'status': 'error',
+                'message': f'Station {station_id} is not configured in station_playlists.json'
+            }, 400
+
+        try:
+            start_date = playlist_batch.parse_iso_date(start_raw)
+            end_date = playlist_batch.parse_iso_date(end_raw)
+        except ValueError:
+            return {
+                'status': 'error',
+                'message': 'start_date and end_date must be dates in YYYY-MM-DD format'
+            }, 400
+
+        if start_date > end_date:
+            return {
+                'status': 'error',
+                'message': 'start_date must not be after end_date'
+            }, 400
+
+        # Copy the session here, in the request context. Reading it inside the thread
+        # raises "Working outside of request context" once the response has been sent.
+        session_data = dict(session)
+        if not spotify_playlist.has_cached_token(session_data):
+            return SPOTIFY_AUTH_REQUIRED, 401
+
+        task_id = str(uuid.uuid4())
+
+        def run_batch():
+            try:
+                playlist_batch.run_range_batch(
+                    station_id, start_date, end_date, task_id, session_data
+                )
+            except Exception as e:
+                logging.error(f"Error in background playlist batch: {e}")
+                spotify_playlist.update_task(
+                    task_id, status='error', message=f'Error during batch: {str(e)}'
+                )
+
+        thread = threading.Thread(target=run_batch)
+        thread.daemon = True
+        thread.start()
+
+        return {
+            'status': 'success',
+            'task_id': task_id,
+            'message': f'Started batch for station {station_id}'
+        }
+
+    except Exception as e:
+        logging.error(f"Error starting playlist batch: {e}")
+        return {
+            'status': 'error',
+            'message': f'Error starting batch: {str(e)}'
+        }, 500
+
 @app.route('/playlist_progress/<task_id>')
 def playlist_progress(task_id):
     """Get the progress of a playlist creation task"""
@@ -451,7 +556,10 @@ def playlist_progress(task_id):
     return {
         'status': task.get('status', 'processing'),
         'progress': task.get('progress', 0),
-        'message': task.get('message', 'Processing...')
+        'message': task.get('message', 'Processing...'),
+        # Batch runs report counts and the unmatched-track list here. Null for the
+        # older create/merge jobs, which have nothing to report beyond a message.
+        'result': task.get('result'),
     }
 
 @app.route('/playlist/<playlist_id>/tracks')

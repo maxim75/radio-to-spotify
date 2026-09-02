@@ -36,6 +36,7 @@ def test_poll_reports_progress_for_a_task_started_elsewhere(client):
         "status": "processing",
         "progress": 45,
         "message": "Searching...",
+        "result": None,
     }
 
 
@@ -47,9 +48,9 @@ def test_poll_for_an_unknown_task_is_a_404(client):
 
 
 def test_poll_response_carries_exactly_the_fields_the_client_reads(client):
-    """PlaylistItem.tsx and SpotifyPlaylistsPage.tsx read status/progress/message."""
+    """PlaylistItem.tsx and SpotifyPlaylistsPage.tsx read status/progress/message/result."""
     spotify_playlist.start_task("task-1")
 
     body = client.get("/playlist_progress/task-1").get_json()
 
-    assert set(body) == {"status", "progress", "message"}
+    assert set(body) == {"status", "progress", "message", "result"}

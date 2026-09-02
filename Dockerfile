@@ -36,6 +36,10 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 # Copy the Python scripts
 COPY *.py ./
+# The station -> playlist config: *.py above does not match it, and without it
+# CONFIG_PATH points at a file that does not exist in the image (station_playlists.py
+# then serves an empty mapping and the batch endpoint 400s for every station).
+COPY station_playlists.json ./
 
 # Jinja templates and the built frontend the app serves (Flask is configured with
 # static_folder='static/dist'). Without these every page 500s with TemplateNotFound.

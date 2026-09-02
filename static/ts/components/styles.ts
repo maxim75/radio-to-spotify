@@ -242,3 +242,47 @@ export const ConnectSpotifyLink = styled.a`
     background-color: #1ed760;
   }
 `;
+
+export const BatchForm = styled.form`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  padding: 16px;
+  margin-bottom: 20px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  background: #fafafa;
+`;
+
+export const BatchField = styled.label`
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: #555;
+`;
+
+export const BatchSelect = styled.select`
+  padding: 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 14px;
+  min-width: 180px;
+`;
+
+export const BatchDateInput = styled.input`
+  padding: 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 14px;
+`;
+
+export const UnmatchedList = styled.ul`
+  margin: 8px 0 0;
+  padding-left: 20px;
+  max-height: 200px;
+  overflow-y: auto;
+  font-size: 13px;
+  color: #666;
+`;
