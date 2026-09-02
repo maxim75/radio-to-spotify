@@ -16,15 +16,19 @@ import logging
 import os
 
 # Overridable so a container can mount its own file without rebuilding the image.
-CONFIG_PATH = os.environ.get(
-    "STATION_PLAYLISTS_CONFIG",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "station_playlists.json"),
+# `or`, not os.environ.get(NAME, default): a *present but empty* var (as .env.template
+# used to ship it, uncommented with no value) must still fall through to the default
+# rather than becoming CONFIG_PATH = "" and making every open() raise FileNotFoundError.
+CONFIG_PATH = os.environ.get("STATION_PLAYLISTS_CONFIG") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "station_playlists.json"
 )
 
 
 def load_config(path=None):
     """Read the station -> playlist-name map. Returns {} if it cannot be read."""
-    path = path or CONFIG_PATH
+    # Only None means "not passed" - an explicitly-passed "" must be attempted (and
+    # fail loudly) rather than silently falling back to CONFIG_PATH.
+    path = CONFIG_PATH if path is None else path
 
     try:
         with open(path, encoding="utf-8") as handle:
