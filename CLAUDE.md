@@ -105,7 +105,11 @@ succeeded** - a Spotify outage leaves those files for tomorrow rather than swall
 them. `load_processed_keys` returns `None` (not an empty set) when the marker cannot be
 read, and the job bootstraps an empty marker rather than treating an S3 failure as "nothing
 processed yet"; if that write also fails it skips the run instead of reprocessing the
-whole bucket.
+whole bucket. Each run also caps itself to `MAX_KEYS_PER_STATION_PER_RUN` (50) of a
+station's oldest pending keys - the marker starts empty, so the first run after a
+deploy would otherwise see the station's entire backlog as new in one pass. The
+excess simply stays pending and drains chronologically over the following nights;
+the log line names how many keys are left when a station is capped.
 
 The nightly job has no Flask session, so it authenticates from `spotify_token_store` -
 `spotify_token.json` in `DATA_DIR`, written owner-only (0600) via a temp file plus
@@ -116,6 +120,25 @@ than in the S3 bucket next to the CSVs. `create_spotify_client_from_store` build
 client over a `WriteThroughTokenStore`, a dict that re-persists the file when spotipy
 refreshes the token - without it a mid-run refresh would be lost exactly the way a
 `dict(session)` copy loses one.
+
+`station_playlists.json` ships with placeholder names, e.g. `"16134": "Radio 16134"`.
+**Edit real names in before the first nightly run.** Playlists resolve by exact name
+and `find_or_create_playlist` creates one on a miss, so the first run creates a
+playlist literally called "Radio 16134"; renaming the config afterwards does not
+rename that playlist, it creates a *second* one under the new name, and the tracks
+already pushed to the first are neither moved nor deduped against it. Do not work
+around this by adding a `"_comment"` key to the JSON - `load_config` accepts any key
+as a station id, so `_comment` would show up as a real entry in the station dropdown.
+
+Two more things this feature accepts rather than guards against: Spotify caps a
+playlist at 10,000 items, and nothing here ever removes a track, so a long-running
+station's playlist will eventually hit that cap - `playlist_add_items` then fails and
+the run is recorded as a failure rather than crashing. And a manual
+`/create-playlist-batch` run for a station overlapping the nightly job pushing that
+same station can add a handful of duplicate tracks, because both read the playlist's
+existing URIs before either writes; this is accepted rather than locked against,
+because `run_range_batch` must not block on `_marker_lock`, which the nightly job
+holds across minutes of Spotify calls.
 
 ### Spotify auth
 
