@@ -173,7 +173,11 @@ export const BatchPlaylistForm: React.FC = () => {
       {error && (
         <StatusMessage type="error">
           {error}
-          {authUrl && <ConnectSpotifyLink href={authUrl}>Connect Spotify</ConnectSpotifyLink>}
+          {authUrl && (
+            <ConnectSpotifyLink href={authUrl} target="_blank" rel="noopener noreferrer">
+              Connect Spotify
+            </ConnectSpotifyLink>
+          )}
         </StatusMessage>
       )}
 
