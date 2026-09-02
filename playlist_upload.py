@@ -77,3 +77,33 @@ def upload_file_to_s3(file_name, bucket, object_name):
     except Exception as e:
         logging.error(f"Unexpected error uploading '{object_name}' to '{bucket}': {e}")
         return False
+
+
+def put_object_to_s3(bucket_name, object_name, content):
+    """
+    Write `content` straight to a key, without a local file first.
+
+    upload_file_to_s3 takes a path, which is wrong for small generated documents like
+    the processed-files marker. Same contract as everything else here: exceptions are
+    swallowed and the return value is the caller's only signal.
+    """
+    try:
+        s3_client = boto3.client(
+            "s3",
+            aws_access_key_id=AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+            region_name=AWS_REGION,
+        )
+
+        body = content.encode("utf-8") if isinstance(content, str) else content
+        s3_client.put_object(Bucket=bucket_name, Key=object_name, Body=body)
+
+        logging.info(f"Object '{object_name}' successfully written to bucket '{bucket_name}'.")
+        return True
+
+    except ClientError as e:
+        logging.error(f"Error writing object '{object_name}' to bucket '{bucket_name}': {e}")
+        return False
+    except Exception as e:
+        logging.error(f"Unexpected error writing '{object_name}' to '{bucket_name}': {e}")
+        return False

@@ -8,13 +8,15 @@ is a cheap filter over the bucket's key list rather than a download of everythin
 """
 
 import datetime
+import json
 import logging
 import re
+import threading
 from io import StringIO
 
 import pandas as pd
 
-from playlist_upload import download_file_from_s3
+from playlist_upload import download_file_from_s3, put_object_to_s3
 
 BUCKET_NAME = "radio-playlists"
 
@@ -110,3 +112,46 @@ def collect_tracks(bucket, keys):
 
     logging.info("Collected %d unique track(s) from %d file(s)", len(tracks), len(keys))
     return tracks
+
+
+# Which stored CSVs have already been pushed to Spotify by the nightly job. Kept in
+# the bucket rather than on the volume so it survives a container being recreated.
+PROCESSED_MARKER_KEY = "processed_playlists.json"
+
+# uWSGI runs a single process (-p 1 --threads 8), so a module-level lock is enough to
+# keep two overlapping nightly runs from interleaving a read and a write.
+_marker_lock = threading.Lock()
+
+
+def load_processed_keys(bucket=BUCKET_NAME):
+    """
+    The set of already-processed keys, or **None** when the marker cannot be read.
+
+    The difference matters. An empty set means "process everything", which is right
+    on a first run. None means S3 said nothing usable, and treating that as an empty
+    set would re-scan the whole bucket and then overwrite the real record.
+    """
+    content = download_file_from_s3(bucket, PROCESSED_MARKER_KEY)
+    if content is None:
+        return None
+
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError as e:
+        logging.error("The processed marker in %s is not valid JSON: %s", bucket, e)
+        return None
+
+    if not isinstance(payload, dict) or not isinstance(payload.get("processed"), list):
+        logging.error("The processed marker in %s does not have the expected shape", bucket)
+        return None
+
+    return {key for key in payload["processed"] if isinstance(key, str)}
+
+
+def save_processed_keys(keys, bucket=BUCKET_NAME):
+    """Write the processed-keys marker. Returns False if S3 rejected it."""
+    payload = {
+        "processed": sorted(keys),
+        "updated_at": datetime.datetime.now().isoformat(timespec="seconds"),
+    }
+    return put_object_to_s3(bucket, PROCESSED_MARKER_KEY, json.dumps(payload, indent=2))
