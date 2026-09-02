@@ -4,9 +4,13 @@ services:
     volumes:
       - ./cron_logs:/var/log # Mount a volume to persist logs on the host
       - ./data:/var/data
-      # Read-only so an operator can edit station names on the host without a
-      # rebuild - the image bakes in a copy, but this mount shadows it.
-      - ./station_playlists.json:/app/station_playlists.json:ro
+      # NOTE: do not bind-mount station_playlists.json over /app/station_playlists.json.
+      # Coolify rewrites a relative bind source to its persistent application directory
+      # (/data/coolify/applications/<uuid>/...), not to the repo checkout, so the source
+      # does not exist; Docker then creates it as a *directory* and mounting that over
+      # the image's file fails the container with "not a directory". To edit station
+      # names without a rebuild, put the file on the volume above and set
+      # STATION_PLAYLISTS_CONFIG=/var/data/station_playlists.json.
 
     ports:
       - '8001:8001'

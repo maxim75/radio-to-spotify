@@ -81,12 +81,19 @@ That store is in-process, so **uWSGI must keep running a single process** (`-p 1
 to (`{"16134": "Radio FM"}`); `STATION_PLAYLISTS_CONFIG` overrides the path. **Station
 ids are opaque strings** - Radoxo ids look numeric but the radiotut source uses the
 slug `retrofm`, and both write into the same bucket. The file is re-read on every
-call, so editing it needs no restart of the process - and in the container
-`docker-compose.yaml` bind-mounts it read-only over the image's copy
-(`./station_playlists.json:/app/station_playlists.json:ro`), so an edit on the host
-takes effect without a rebuild there either. `Dockerfile` also bakes a copy in with
-`COPY station_playlists.json ./` (the earlier `COPY *.py ./` does not match the
-`.json` glob), so the mount is a convenience, not the only way the file gets there.
+call, so editing it needs no restart of the process. In the container the file comes
+from `Dockerfile`'s `COPY station_playlists.json ./` (the earlier `COPY *.py ./` does
+not match the `.json` glob), so changing it there means a rebuild.
+
+**Do not bind-mount it over `/app/station_playlists.json` in `docker-compose.yaml`.**
+That was tried and it breaks the container on Coolify: a relative bind source is
+rewritten to the persistent application directory
+(`/data/coolify/applications/<uuid>/...`) rather than the repo checkout, so the path
+does not exist, Docker creates it as a *directory*, and mounting a directory over the
+image's file aborts startup with "not a directory". To edit station names without a
+rebuild, put the file on the already-working `./data:/var/data` volume and point
+`STATION_PLAYLISTS_CONFIG=/var/data/station_playlists.json` at it - but only once the
+file is actually there, since a path that does not resolve yields an empty mapping.
 A broken config yields an empty mapping and a 400 from the endpoint, never an
 import-time crash.
 
