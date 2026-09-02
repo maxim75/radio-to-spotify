@@ -72,6 +72,23 @@ def test_saving_leaves_no_temporary_files_behind(tmp_path, monkeypatch):
     assert sorted(p.name for p in tmp_path.iterdir()) == ["spotify_token.json"]
 
 
+def test_saving_cleans_up_temp_file_on_replace_failure(tmp_path, monkeypatch):
+    # Verify the cleanup code by injecting a failure between mkstemp and os.replace.
+    # A successful save trivially leaves no temp file, so we must test the error path.
+    monkeypatch.setenv("SPOTIFY_TOKEN_STORE", str(tmp_path / "spotify_token.json"))
+
+    def raise_error(*args, **kwargs):
+        raise IOError("mock failure at replace")
+
+    monkeypatch.setattr(spotify_token_store.os, "replace", raise_error)
+
+    assert spotify_token_store.save_token(TOKEN) is False
+
+    # Verify no temp files were left behind
+    temp_files = [p.name for p in tmp_path.iterdir() if ".spotify_token." in p.name and p.name.endswith(".tmp")]
+    assert temp_files == []
+
+
 def test_clear_token_removes_the_file(store):
     spotify_token_store.save_token(TOKEN)
 
