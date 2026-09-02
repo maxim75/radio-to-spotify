@@ -409,12 +409,11 @@ def create_playlist_from_file():
                 spotify_playlist.create_playlist_from_csv(csv_content, playlist_name, task_id, session_data)
             except Exception as e:
                 logging.error(f"Error in background playlist creation: {e}")
-                # Update task with error status
-                if task_id in spotify_playlist.tasks:
-                    spotify_playlist.tasks[task_id].update({
-                        'status': 'error',
-                        'message': f'Error during playlist creation: {str(e)}'
-                    })
+                spotify_playlist.update_task(
+                    task_id,
+                    status='error',
+                    message=f'Error during playlist creation: {str(e)}'
+                )
         
         # Start the background thread
         thread = threading.Thread(target=run_playlist_creation)
@@ -437,7 +436,7 @@ def create_playlist_from_file():
 @app.route('/playlist_progress/<task_id>')
 def playlist_progress(task_id):
     """Get the progress of a playlist creation task"""
-    task = spotify_playlist.tasks.get(task_id)
+    task = spotify_playlist.get_task(task_id)
     if not task:
         return {
             'status': 'error',
@@ -504,12 +503,11 @@ def merge_playlists():
                 spotify_playlist.merge_playlists(source_playlist_id, target_playlist_id, task_id, session_data)
             except Exception as e:
                 logging.error(f"Error in background playlist merging: {e}")
-                # Update task with error status
-                if task_id in spotify_playlist.tasks:
-                    spotify_playlist.tasks[task_id].update({
-                        'status': 'error',
-                        'message': f'Error during playlist merging: {str(e)}'
-                    })
+                spotify_playlist.update_task(
+                    task_id,
+                    status='error',
+                    message=f'Error during playlist merging: {str(e)}'
+                )
         
         # Start the background thread
         thread = threading.Thread(target=run_merge_process)

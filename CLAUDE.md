@@ -33,7 +33,15 @@ docker-compose up --build -d
 
 The Docker image installs deps with `uv sync --locked --group prod` and puts `/app/.venv/bin` on `PATH`, so `uwsgi` and `python` resolve directly inside the container without `uv run`.
 
-There is no test suite, no linter config, and no database — README sections describing `pytest`, `flake8`, `npm test`, `npm run lint`, `npm run dev`, and `flask db` describe things that do not exist in this repo. The README's API endpoint list is also stale; read `app.py` for the real routes.
+Python tests run under pytest (in the `dev` dependency group, so `uv sync` installs it):
+
+```bash
+uv run pytest
+```
+
+`[tool.pytest.ini_options]` puts the repo root on `pythonpath` because the app is flat modules rather than an installed package. Coverage is partial — the task store, `create_playlist_from_csv` progress, and the progress route. The scrapers, S3, and all Spotify network paths are untested.
+
+There is no frontend test runner, no linter config, and no database — README sections describing `flake8`, `npm test`, `npm run lint`, `npm run dev`, and `flask db` describe things that do not exist in this repo. The README's API endpoint list is also stale; read `app.py` for the real routes.
 
 Credentials come from `.env` (copy `.env.template`): `SPOTIPY_CLIENT_ID/SECRET/REDIRECT_URI`, `SPOTIFY_USERNAME`, `AWS_ACCESS_KEY_ID/SECRET_ACCESS_KEY/REGION`, `BASIC_AUTH_USERNAME/PASSWORD`. `.flaskenv` sets `FLASK_APP`/debug. Only `spotify_playlist.py` calls `load_dotenv()`, so AWS vars reaching `playlist_upload.py`/`app.py` depend on that import happening first (it does, via `app.py`) — don't reorder imports in `app.py` casually.
 
@@ -63,7 +71,9 @@ Adding a route means it is protected automatically. Anything that must be public
 
 ### Async work and progress
 
-Long operations (create-from-CSV, merge) return a `task_id` immediately and run in a daemon `threading.Thread`; the frontend polls `/playlist_progress/<task_id>`. Progress lives in the module-level `spotify_playlist.tasks` dict — **in-memory, per-process, never evicted**. Under the Docker `uwsgi -p 4` config a poll can land on a worker that has no record of the task, and the APScheduler cron job (`23:40`, registered at import in `app.py`) is registered once per worker.
+Long operations (create-from-CSV, merge) return a `task_id` immediately and run in a daemon `threading.Thread`; the frontend polls `/playlist_progress/<task_id>`. Progress lives in an in-process store in `spotify_playlist.py` — reach it through `start_task`/`update_task`/`get_task`, never the `_tasks` dict, which is guarded by a lock and swept of entries older than `TASK_TTL_SECONDS` (1h) on every `start_task`. `update_task` on an evicted id is a deliberate no-op.
+
+That store is in-process, so **uWSGI must keep running a single process** (`-p 1 --threads 8` in the Dockerfile). Raising `-p` again silently breaks polling: the POST that starts a job and the GET that polls it land in different address spaces, the poll 404s, and the browser reports a healthy job as failed. Threads are the right axis anyway — every job is I/O-bound on Spotify and S3. One process also means the APScheduler cron job (`23:40`, registered at import in `app.py`) is registered exactly once, and `should_start_scheduler()` is belt-and-braces rather than load-bearing.
 
 ### Spotify auth
 
