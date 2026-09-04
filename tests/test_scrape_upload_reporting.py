@@ -6,6 +6,9 @@ Both the cron job and /load_playlist report what happened purely from the
 counted as uploaded, the failure is invisible in the log and in the API response -
 which is the same class of silent breakage that filled the bucket with 877
 one-byte CSVs.
+
+The station list comes from the config file rather than a Python literal, so these
+tests drive it by monkeypatching load_stations.
 """
 
 import os
@@ -19,6 +22,7 @@ os.environ.setdefault("PLAYLIST_DATA_DIR", "/tmp")
 import app as flask_app
 import load_playlist
 import playlist_upload
+import station_playlists
 
 
 TRACKS = pd.DataFrame(
@@ -26,30 +30,38 @@ TRACKS = pd.DataFrame(
     columns=load_playlist.PLAYLIST_COLUMNS,
 )
 
+RETROFM = {"station_id": "retrofm", "playlist_name": "Retro FM", "source": "radiotut"}
+RADOXO = {"station_id": "38225", "playlist_name": "Radio 38225", "source": "radoxo"}
+
 
 @pytest.fixture
 def sources(monkeypatch, tmp_path):
     """
     Point both scrapers at fixed data and capture what gets handed to S3.
 
-    Returns a dict the test mutates to decide whether the upload succeeds.
+    Returns a dict the test mutates to decide which stations are configured and
+    whether the upload succeeds.
     """
     monkeypatch.setattr(load_playlist, "DATA_DIR", str(tmp_path))
     monkeypatch.setattr(flask_app.load_playlist, "DATA_DIR", str(tmp_path))
-    monkeypatch.setattr(load_playlist, "RADOXO_STATION_IDS", [])
 
-    state = {"upload_succeeds": True, "uploaded_files": []}
+    state = {"upload_succeeds": True, "uploaded_files": [], "stations": [RETROFM], "scraped": []}
 
-    def fake_scrape_retrofm():
-        path = tmp_path / "playlist_retrofm_20251007_120000.csv"
-        TRACKS.to_csv(path, index=False, encoding="utf-8")
-        return str(path)
+    def fake_radiotut(station_id, day):
+        state["scraped"].append(("radiotut", str(station_id)))
+        return TRACKS
+
+    def fake_radoxo(station_id, date):
+        state["scraped"].append(("radoxo", str(station_id)))
+        return TRACKS
 
     def fake_upload(file_name, bucket, object_name):
         state["uploaded_files"].append(object_name)
         return state["upload_succeeds"]
 
-    monkeypatch.setattr(flask_app.load_playlist, "load_playlist", fake_scrape_retrofm)
+    monkeypatch.setattr(station_playlists, "load_stations", lambda *a, **kw: state["stations"])
+    monkeypatch.setattr(flask_app.load_playlist, "get_playlist_from_radiotut", fake_radiotut)
+    monkeypatch.setattr(flask_app.load_playlist, "get_playlist_from_radoxo", fake_radoxo)
     monkeypatch.setattr(flask_app.playlist_upload, "upload_file_to_s3", fake_upload)
     return state
 
@@ -57,8 +69,10 @@ def sources(monkeypatch, tmp_path):
 def test_a_successful_upload_is_reported_as_uploaded(sources):
     uploaded, failures = flask_app.scrape_and_upload_playlists()
 
-    assert uploaded == ["playlist_retrofm_20251007_120000.csv"]
     assert failures == []
+    assert len(uploaded) == 1
+    assert uploaded[0].startswith("playlist_retrofm_")
+    assert uploaded[0].endswith(".csv")
 
 
 def test_a_failed_upload_is_reported_as_a_failure_not_a_success(sources):
@@ -71,17 +85,59 @@ def test_a_failed_upload_is_reported_as_a_failure_not_a_success(sources):
     assert [source for source, _ in failures] == ["retrofm"]
 
 
-def test_a_failed_radoxo_upload_is_reported_as_a_failure(monkeypatch, sources):
-    monkeypatch.setattr(flask_app.load_playlist, "RADOXO_STATION_IDS", [38225])
-    monkeypatch.setattr(
-        flask_app.load_playlist, "get_playlist_from_radoxo", lambda sid, date: TRACKS
-    )
+def test_a_failed_radoxo_upload_is_reported_as_a_failure(sources):
+    sources["stations"] = [RADOXO]
     sources["upload_succeeds"] = False
 
     uploaded, failures = flask_app.scrape_and_upload_playlists()
 
     assert uploaded == []
     assert "38225" in [source for source, _ in failures]
+
+
+def test_each_station_is_scraped_from_the_source_it_is_configured_with(sources):
+    sources["stations"] = [RETROFM, RADOXO]
+
+    flask_app.scrape_and_upload_playlists()
+
+    assert sources["scraped"] == [("radiotut", "retrofm"), ("radoxo", "38225")]
+
+
+def test_one_failing_station_does_not_stop_the_others(sources, monkeypatch):
+    sources["stations"] = [RETROFM, RADOXO]
+    monkeypatch.setattr(
+        flask_app.load_playlist,
+        "get_playlist_from_radiotut",
+        lambda sid, day: (_ for _ in ()).throw(RuntimeError("page layout changed")),
+    )
+
+    uploaded, failures = flask_app.scrape_and_upload_playlists()
+
+    assert [source for source, _ in failures] == ["retrofm"]
+    assert len(uploaded) == 1
+
+
+def test_an_empty_scrape_is_a_failure_and_is_never_uploaded(sources, monkeypatch):
+    # Writing an empty frame is what produced the 877 one-byte CSVs in the bucket.
+    empty = pd.DataFrame([], columns=load_playlist.PLAYLIST_COLUMNS)
+    monkeypatch.setattr(flask_app.load_playlist, "get_playlist_from_radiotut", lambda sid, day: empty)
+
+    uploaded, failures = flask_app.scrape_and_upload_playlists()
+
+    assert uploaded == []
+    assert sources["uploaded_files"] == []
+    assert [source for source, _ in failures] == ["retrofm"]
+
+
+def test_an_empty_configuration_is_reported_rather_than_looking_like_a_clean_run(sources):
+    # An unreadable or empty config now means nothing is scraped at all, so it has to
+    # be louder than an empty success.
+    sources["stations"] = []
+
+    uploaded, failures = flask_app.scrape_and_upload_playlists()
+
+    assert uploaded == []
+    assert [source for source, _ in failures] == ["config"]
 
 
 def test_load_playlist_route_reports_a_failed_upload_as_an_error(sources):

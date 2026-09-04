@@ -51,17 +51,6 @@ def get_playlist_from_radiotut(station_id, day):
 # and its station ids are NOT the old raddio.net ids.
 RADOXO_PLAYLIST_URL = "https://radoxo.com/playlist-for-day"
 
-# Radoxo station ids to scrape nightly.
-#
-# EMPTY BY DESIGN. The previous values (75885, 309175, 294683) were raddio.net ids and do
-# not carry over: 309175 and 294683 now 404, and 75885 resolves to an unrelated Brazilian
-# station. Scraping them would collect the wrong data rather than no data.
-#
-# To repopulate, find each station on https://radoxo.com and run:
-#     uv run python -c "import load_playlist; \
-#         print(load_playlist.get_radoxo_station_id('https://radoxo.com/<country>/<slug>'))"
-RADOXO_STATION_IDS = [38225, 16134, 38234]
-
 class NoTracksFoundError(Exception):
     """Raised when a scrape returns a page but no tracks, so breakage is never silent."""
 
@@ -117,7 +106,7 @@ def get_playlist_from_radoxo(station_id, date):
 def get_radoxo_station_id(station_page_url):
     """
     Look up a Radoxo numeric station id from its public page URL, e.g.
-    https://radoxo.com/ukraine/xit-fm. Helper for reconfiguring STATION_IDS by hand.
+    https://radoxo.com/ukraine/xit-fm. Use it to find the id to type into /stations.
     """
     response = requests.get(station_page_url, headers={"user-agent": get_user_agent()}, timeout=30)
     response.raise_for_status()
@@ -126,29 +115,3 @@ def get_radoxo_station_id(station_page_url):
     if not day_link:
         raise ValueError(f"No station id found on {station_page_url}")
     return int(day_link["data-station-id"])
-
-def load_playlist():
-    """
-    Scrape retrofm and write it to DATA_DIR, returning the filename.
-
-    Raises NoTracksFoundError on an empty scrape, matching get_playlist_from_radoxo, so
-    no file is written and callers never upload an empty playlist.
-    """
-    station_id = "retrofm"
-    logging.info(f"load_playlist {datetime.datetime.now()}")
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    playlist_df = get_playlist_from_radiotut(station_id, 2)
-    if playlist_df.empty:
-        raise NoTracksFoundError(
-            f"radiotut station {station_id} returned no tracks - the page layout may have changed"
-        )
-
-    filename = os.path.join(DATA_DIR, f"playlist_{station_id}_{timestamp}.csv")
-    # Track names are Cyrillic; never rely on the platform default encoding.
-    playlist_df.to_csv(filename, index=False, encoding="utf-8")
-    logging.info(f"retrofm: wrote {len(playlist_df)} tracks to {filename}")
-    return filename
-
-
-

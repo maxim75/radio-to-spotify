@@ -8,15 +8,19 @@ services:
       # Coolify rewrites a relative bind source to its persistent application directory
       # (/data/coolify/applications/<uuid>/...), not to the repo checkout, so the source
       # does not exist; Docker then creates it as a *directory* and mounting that over
-      # the image's file fails the container with "not a directory". To edit station
-      # names without a rebuild, put the file on the volume above and set
-      # STATION_PLAYLISTS_CONFIG=/var/data/station_playlists.json.
+      # the image's file fails the container with "not a directory". The station config
+      # lives on the volume above instead - see STATION_PLAYLISTS_CONFIG below.
 
     ports:
       - '8001:8001'
 
     environment:
       - TZ=Etc/UTC
+      # The station config on the mounted volume, so edits made on the /stations page
+      # survive a rebuild - the image's copy at /app/station_playlists.json does not.
+      # station_playlists.bootstrap_config() seeds this file from the image's copy the
+      # first time the container starts, so the volume never begins empty.
+      - STATION_PLAYLISTS_CONFIG=/var/data/station_playlists.json
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_REGION=${AWS_REGION}

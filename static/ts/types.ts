@@ -53,3 +53,11 @@ export interface MergeProgress {
   progress: number;
   message: string;
 }
+
+export interface Station {
+  station_id: string;
+  playlist_name: string;
+  // Which scraper feeds this station. The edit form fills its dropdown from
+  // /api/stations rather than hardcoding the values a second time.
+  source: string;
+}
