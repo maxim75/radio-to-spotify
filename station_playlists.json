@@ -1,6 +1,18 @@
 {
-  "retrofm": "Retro FM",
-  "16134": "Radio 16134",
-  "38225": "Radio 38225",
-  "38234": "Radio 38234"
+  "retrofm": {
+    "playlist_name": "Retro FM",
+    "source": "radiotut"
+  },
+  "16134": {
+    "playlist_name": "Radio 16134",
+    "source": "radoxo"
+  },
+  "38225": {
+    "playlist_name": "Radio 38225",
+    "source": "radoxo"
+  },
+  "38234": {
+    "playlist_name": "Radio 38234",
+    "source": "radoxo"
+  }
 }

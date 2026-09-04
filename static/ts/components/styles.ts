@@ -286,3 +286,64 @@ export const UnmatchedList = styled.ul`
   font-size: 13px;
   color: #666;
 `;
+
+export const TextInput = styled.input`
+  padding: 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 14px;
+  min-width: 220px;
+  font-family: inherit;
+
+  &:focus {
+    outline: none;
+    border-color: #1DB954;
+  }
+`;
+
+export const FieldHint = styled.span`
+  font-size: 12px;
+  color: #888;
+`;
+
+export const DangerButton = styled.button`
+  background-color: #fff;
+  color: #a94442;
+  border: 1px solid #ebccd1;
+  padding: 8px 16px;
+  border-radius: 20px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.3s ease;
+
+  &:hover {
+    background-color: #f2dede;
+  }
+
+  &:disabled {
+    color: #ccc;
+    border-color: #eee;
+    cursor: not-allowed;
+    background-color: #fff;
+  }
+`;
+
+// The station id and source under a station's playlist name in the list.
+export const StationMeta = styled.span`
+  display: block;
+  font-size: 12px;
+  color: #666;
+  margin-top: 2px;
+`;
+
+// The two irreversible-ish consequences of an edit, stated where the edit is made.
+export const WarningNote = styled.div`
+  padding: 10px 12px;
+  margin: 10px 0 20px;
+  border: 1px solid #faebcc;
+  border-radius: 4px;
+  background-color: #fcf8e3;
+  color: #8a6d3b;
+  font-size: 13px;
+  line-height: 1.5;
+`;

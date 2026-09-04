@@ -3,6 +3,8 @@ import ReactDOM from 'react-dom/client';
 import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import { PlaylistsPage } from './components/PlaylistsPage';
 import { SpotifyPlaylistsPage } from './components/SpotifyPlaylistsPage';
+import { StationsPage } from './components/StationsPage';
+import { StationEditPage } from './components/StationEditPage';
 
 /**
  * Spotify connection state in the nav, so it is visible before a request fails
@@ -113,6 +115,19 @@ const App: React.FC = () => {
             >
               Spotify Playlists
             </Link>
+            <Link 
+              to="/stations" 
+              style={{ 
+                textDecoration: 'none', 
+                color: '#333', 
+                fontWeight: 'bold',
+                padding: '8px 12px',
+                borderRadius: '4px',
+                backgroundColor: '#f0f0f0'
+              }}
+            >
+              Stations
+            </Link>
             <span style={{ marginLeft: 'auto' }}>
               <SpotifyAuthStatus />
             </span>
@@ -122,6 +137,11 @@ const App: React.FC = () => {
         <Routes>
           <Route path="/" element={<PlaylistsPage />} />
           <Route path="/spotify" element={<SpotifyPlaylistsPage />} />
+          <Route path="/stations" element={<StationsPage />} />
+          {/* "new" before ":stationId" so /stations/new is the add form, not an edit
+              page for a station called "new". */}
+          <Route path="/stations/new" element={<StationEditPage />} />
+          <Route path="/stations/:stationId" element={<StationEditPage />} />
         </Routes>
       </div>
     </Router>

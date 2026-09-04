@@ -3,6 +3,7 @@ import logging
 import subprocess
 import os
 import hmac
+import re
 from apscheduler.schedulers.background import BackgroundScheduler
 import atexit
 import load_playlist
@@ -53,6 +54,11 @@ logging.basicConfig(
 )
 
 logging.info('app.py script started')
+
+# Before anything reads the config: in production STATION_PLAYLISTS_CONFIG points at
+# the mounted volume, which starts out empty, and an empty config now means nothing is
+# scraped at all rather than merely nothing being pushed to Spotify.
+station_playlists.bootstrap_config()
 
 app = Flask(__name__, static_url_path='/static', static_folder='static/dist')
 # `or` rather than a get() default: docker compose substitutes an unset variable as an
@@ -141,9 +147,29 @@ def require_basic_auth():
         }
     )
 
+def scrape_one_station(station, scrape_date):
+    """
+    Scrape a single configured station. Returns a DataFrame of its tracks.
+
+    The source field decides which scraper runs; load_stations has already rejected
+    any value that is not one of them, so there is no fallback branch to get wrong.
+    """
+    station_id = station["station_id"]
+
+    if station["source"] == "radiotut":
+        # day=2 is yesterday in radiotut's offset scheme, matching the date the Radoxo
+        # branch asks for - the nightly job runs at 23:40 and wants a complete day.
+        return load_playlist.get_playlist_from_radiotut(station_id, 2)
+
+    return load_playlist.get_playlist_from_radoxo(station_id, scrape_date)
+
+
 def scrape_and_upload_playlists():
     """
-    Scrape every configured source and upload the results to S3.
+    Scrape every configured station and upload the results to S3.
+
+    The station list comes from station_playlists.json - the same file the /stations
+    page edits - so adding a station takes an edit rather than a deploy.
 
     A playlist is only uploaded when it actually contains tracks: an empty scrape is a
     bug in the scraper or a retired station, and writing it produced the 877 one-byte
@@ -155,48 +181,46 @@ def scrape_and_upload_playlists():
     uploaded = []
     failures = []
 
-    try:
-        # load_playlist() raises NoTracksFoundError on an empty scrape and only writes a
-        # file when it has tracks, so there is nothing to re-read here. Reading it back
-        # was worse than redundant: a bare open() uses the platform default encoding,
-        # which is ASCII in the container, and the Cyrillic track names blew up on it.
-        playlist_filename = load_playlist.load_playlist()
-        object_name = playlist_filename.split("/")[-1]
-        # upload_file_to_s3 swallows its exceptions, so this return value is the only
-        # sign the object never landed. Appending regardless reported a playlist as
-        # uploaded when S3 had rejected it, in the cron log and in /load_playlist alike.
-        if playlist_upload.upload_file_to_s3(playlist_filename, "radio-playlists", object_name):
-            uploaded.append(object_name)
-        else:
-            failures.append(("retrofm", f"upload to S3 failed for {object_name}"))
-    except Exception as e:
-        failures.append(("retrofm", str(e)))
-        logging.error(f"Error scraping retrofm: {e}")
+    stations = station_playlists.load_stations()
+    if not stations:
+        # Silence here would look identical to a clean run, and an empty config now
+        # stops the scrape as well as the Spotify push.
+        logging.error("No stations are configured - nothing to scrape")
+        return uploaded, [("config", "no stations are configured - nothing to scrape")]
 
     current_datetime = datetime.datetime.now()
-    yesterday_date = (current_datetime - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    scrape_date = (current_datetime - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
 
-    for station_id in load_playlist.RADOXO_STATION_IDS:
+    for station in stations:
+        station_id = station["station_id"]
         try:
-            playlist_df = load_playlist.get_playlist_from_radoxo(station_id, yesterday_date)
+            playlist_df = scrape_one_station(station, scrape_date)
 
             # Guard the upload itself as well, so a future scraper change that returns an
             # empty frame instead of raising still cannot write a junk file to S3.
             if playlist_df.empty:
-                failures.append((str(station_id), "scrape produced no tracks - not uploaded"))
+                failures.append((station_id, "scrape produced no tracks - not uploaded"))
                 logging.error(f"Station {station_id} produced no tracks - skipping upload")
                 continue
 
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = os.path.join(load_playlist.DATA_DIR, f"playlist_{station_id}_{timestamp}.csv")
-            playlist_df.to_csv(filename, index=False)
+            # Track names are Cyrillic; never rely on the platform default encoding,
+            # which is ASCII in the container.
+            playlist_df.to_csv(filename, index=False, encoding="utf-8")
             object_name = filename.split("/")[-1]
+            logging.info(
+                f"{station_id}: scraped {len(playlist_df)} tracks from {station['source']}"
+            )
+            # upload_file_to_s3 swallows its exceptions, so this return value is the only
+            # sign the object never landed. Appending regardless reported a playlist as
+            # uploaded when S3 had rejected it, in the cron log and in /load_playlist alike.
             if playlist_upload.upload_file_to_s3(filename, "radio-playlists", object_name):
                 uploaded.append(object_name)
             else:
-                failures.append((str(station_id), f"upload to S3 failed for {object_name}"))
+                failures.append((station_id, f"upload to S3 failed for {object_name}"))
         except Exception as e:
-            failures.append((str(station_id), str(e)))
+            failures.append((station_id, str(e)))
             logging.error(f"Error scraping station {station_id}: {e}")
 
     return uploaded, failures
@@ -352,6 +376,17 @@ def spotify_page():
     """Serve the React application for Spotify playlists page"""
     return render_template('playlists.html', title="Spotify Playlists")
 
+@app.route('/stations')
+@app.route('/stations/<path:subpath>')
+def stations_page(subpath=None):
+    """
+    Serve the React application for the station configuration page.
+
+    The <path:subpath> variant exists so a hard reload on /stations/<station_id> still
+    reaches the app rather than 404ing: react-router owns everything below /stations.
+    """
+    return render_template('playlists.html', title="Stations")
+
 @app.route('/load_playlist')
 def load_playlist_route():
     uploaded, failures = scrape_and_upload_playlists()
@@ -463,6 +498,149 @@ def create_playlist_from_file():
 def api_station_playlists():
     """The configured station -> Spotify playlist name map, for the batch form"""
     return {'status': 'success', 'stations': station_playlists.get_configured_stations()}
+
+
+# A station id ends up in an S3 object key (playlist_<id>_<date>_<time>.csv) and in a
+# URL path, so it is restricted to characters that survive both intact. Underscores are
+# allowed: PLAYLIST_KEY_RE anchors on the trailing _YYYYMMDD_HHMMSS.csv, so they parse.
+STATION_ID_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_-]*$')
+MAX_STATION_ID_LENGTH = 64
+# Spotify rejects a playlist name longer than this, and find_or_create_playlist would
+# only discover that on the night of the first run.
+MAX_PLAYLIST_NAME_LENGTH = 100
+
+
+def validate_station(data):
+    """(record, None) for a valid body, or (None, message) explaining what is wrong."""
+    if not isinstance(data, dict):
+        return None, 'A JSON body with station_id, playlist_name and source is required'
+
+    station_id = str(data.get('station_id') or '').strip()
+    playlist_name = str(data.get('playlist_name') or '').strip()
+    source = str(data.get('source') or '').strip()
+
+    if not station_id:
+        return None, 'station_id is required'
+    if len(station_id) > MAX_STATION_ID_LENGTH:
+        return None, f'station_id must be at most {MAX_STATION_ID_LENGTH} characters'
+    if not STATION_ID_RE.match(station_id):
+        return None, (
+            'station_id may contain only letters, digits, hyphens and underscores, and '
+            'must start with a letter or digit'
+        )
+    if not playlist_name:
+        return None, 'playlist_name is required'
+    if len(playlist_name) > MAX_PLAYLIST_NAME_LENGTH:
+        return None, f'playlist_name must be at most {MAX_PLAYLIST_NAME_LENGTH} characters'
+    if source not in station_playlists.SOURCES:
+        return None, (
+            'source must be one of: ' + ', '.join(station_playlists.SOURCES)
+        )
+
+    return {
+        'station_id': station_id,
+        'playlist_name': playlist_name,
+        'source': source,
+    }, None
+
+
+def save_stations_or_500(stations):
+    """Persist the list, or the 500 body to return. save_stations never raises."""
+    if station_playlists.save_stations(stations):
+        return None
+    return {
+        'status': 'error',
+        'message': 'Could not write the station configuration - see the server log'
+    }, 500
+
+
+@app.route('/api/stations')
+def api_stations():
+    """The configured stations, for the configuration page"""
+    return {
+        'status': 'success',
+        'stations': station_playlists.load_stations(),
+        # So the edit form's source dropdown has one source of truth, not two.
+        'sources': list(station_playlists.SOURCES),
+    }
+
+
+@app.route('/api/stations', methods=['POST'])
+def api_create_station():
+    """Add a station to the configuration"""
+    record, message = validate_station(request.get_json(silent=True))
+    if message:
+        return {'status': 'error', 'message': message}, 400
+
+    # Read, mutate and write under the lock: two concurrent edits otherwise both start
+    # from the file as it was and the second one drops the first one's change.
+    with station_playlists.config_lock:
+        stations = station_playlists.load_stations()
+        if any(s['station_id'] == record['station_id'] for s in stations):
+            return {
+                'status': 'error',
+                'message': f"Station {record['station_id']} already exists"
+            }, 400
+
+        stations.append(record)
+        failure = save_stations_or_500(stations)
+
+    return failure or {'status': 'success', 'station': record}
+
+
+@app.route('/api/stations/<station_id>', methods=['PUT'])
+def api_update_station(station_id):
+    """Change a station's id, playlist name or source"""
+    record, message = validate_station(request.get_json(silent=True))
+    if message:
+        return {'status': 'error', 'message': message}, 400
+
+    with station_playlists.config_lock:
+        stations = station_playlists.load_stations()
+        index = next(
+            (i for i, s in enumerate(stations) if s['station_id'] == station_id), None
+        )
+        if index is None:
+            return {
+                'status': 'error',
+                'message': f'Station {station_id} is not configured'
+            }, 404
+
+        renamed = record['station_id'] != station_id
+        if renamed and any(s['station_id'] == record['station_id'] for s in stations):
+            return {
+                'status': 'error',
+                'message': f"Station {record['station_id']} already exists"
+            }, 400
+
+        # Replace in place rather than delete-and-append: the file is ordered and the
+        # page lists it in file order, so an edit must not reshuffle the list.
+        stations[index] = record
+        failure = save_stations_or_500(stations)
+
+    return failure or {'status': 'success', 'station': record}
+
+
+@app.route('/api/stations/<station_id>', methods=['DELETE'])
+def api_delete_station(station_id):
+    """
+    Remove a station from the configuration.
+
+    This only stops the station being scraped and pushed. The Spotify playlist and the
+    CSVs already in S3 are left exactly as they are.
+    """
+    with station_playlists.config_lock:
+        stations = station_playlists.load_stations()
+        remaining = [s for s in stations if s['station_id'] != station_id]
+        if len(remaining) == len(stations):
+            return {
+                'status': 'error',
+                'message': f'Station {station_id} is not configured'
+            }, 404
+
+        failure = save_stations_or_500(remaining)
+
+    return failure or {'status': 'success', 'station_id': station_id}
 
 
 @app.route('/create-playlist-batch', methods=['POST'])
